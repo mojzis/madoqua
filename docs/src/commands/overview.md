@@ -2,11 +2,13 @@
 
 | Command | What it does |
 |---|---|
-| [`doctor`](doctor.md) | Report the resolved configuration and version |
+| [`run`](run.md) | The hook: guard, fix, stage, check, one line. Also what a bare `madoqua` does. |
+| [`install`](install.md) | Write `hooks/pre-commit` and point git at it. |
+| [`stats`](stats.md) | Summarise the timing log. |
 
 ## Global flags
 
 | Flag | Meaning |
 |---|---|
-| `--root <PATH>` | Project root. Defaults to the current directory. |
+| `--root <PATH>` | Where to start looking for the repository. Defaults to the current directory. |
 | `--verbose`, `-v` | Raise the default log level to `debug`. `RUST_LOG` still wins. |

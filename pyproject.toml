@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "madoqua"
-description = "TODO: one-line description of madoqua"
+description = "A small, fast pre-commit hook runner for Python repos - silent until there's something to say"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
