@@ -10,7 +10,7 @@
 //! that has no timings.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -36,13 +36,40 @@ pub fn target(root: &Path, configured: Option<&str>, home: Option<&Path>) -> Log
     let raw = configured.unwrap_or(DEFAULT_LOG);
     let expanded = expand_home(raw, home);
 
-    let path = if expanded.is_absolute() { expanded } else { root.join(expanded) };
+    let joined = if expanded.is_absolute() { expanded } else { root.join(expanded) };
+    let path = normalise(&joined);
 
     let repo = (!path.starts_with(root))
         .then(|| root.file_name().map(|name| name.to_string_lossy().into_owned()))
         .flatten();
 
     LogTarget { path, repo }
+}
+
+/// Fold `.` and `..` away without touching the filesystem.
+///
+/// `Path::starts_with` compares components, so `<root>/../shared.jsonl` starts
+/// with `root` and would be taken for a log inside the repository — leaving
+/// every record in a genuinely shared log without a `repo` field, and
+/// `stats --repo` with nothing to report and nothing to say about why.
+fn normalise(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            // Popping past the root, or past a leading `..`, would invent a
+            // path; keep the component instead.
+            Component::ParentDir if out.components().next_back().is_some_and(is_named) => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn is_named(component: Component<'_>) -> bool {
+    matches!(component, Component::Normal(_))
 }
 
 /// [`target`] against the real environment.
@@ -136,6 +163,24 @@ mod tests {
             Some("project"),
             "a shared log mixes repos, so each line has to name its own"
         );
+    }
+
+    #[test]
+    fn a_path_that_climbs_out_of_the_repo_still_names_the_repo() {
+        let target = target(&root(), Some("../shared.jsonl"), Some(Path::new(HOME)));
+        assert_eq!(target.path, PathBuf::from("/home/dev/src/shared.jsonl"));
+        assert_eq!(
+            target.repo.as_deref(),
+            Some("project"),
+            "`..` is how sibling checkouts share one log, and a shared log has to name its repos"
+        );
+    }
+
+    #[test]
+    fn a_path_that_climbs_out_and_back_in_is_inside_the_repo() {
+        let target = target(&root(), Some("../project/build/t.jsonl"), Some(Path::new(HOME)));
+        assert_eq!(target.path, root().join("build/t.jsonl"));
+        assert_eq!(target.repo, None, "the long way round still lands in the same repo");
     }
 
     #[test]

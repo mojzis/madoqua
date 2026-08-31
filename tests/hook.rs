@@ -71,7 +71,7 @@ fn a_failing_check_reports_itself_and_nothing_else() {
     repo.stage("a.py", "x = 1\n");
 
     let assert = repo.madoqua().arg("run").assert().code(1);
-    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    let stderr = common::stderr(&assert);
 
     assert_eq!(
         stderr, "== fakefail failed ==\na.py:1: nope\n",
@@ -111,7 +111,7 @@ fn a_check_with_pass_files_false_receives_no_file_arguments() {
 
     let assert = repo.madoqua().arg("run").assert().code(1);
     assert_eq!(
-        String::from_utf8_lossy(&assert.get_output().stderr),
+        common::stderr(&assert),
         "== argc failed ==\nargc=0\n",
         "a repo-wide tool must not be handed the staged file list"
     );
@@ -128,7 +128,7 @@ fn a_check_with_pass_files_receives_every_staged_file() {
 
     let assert = repo.madoqua().arg("run").assert().code(1);
     assert_eq!(
-        String::from_utf8_lossy(&assert.get_output().stderr),
+        common::stderr(&assert),
         "== argc failed ==\nargc=2\n",
         ".py and .pyi are the hook's business; .txt is not"
     );
@@ -159,7 +159,7 @@ fn the_overlay_can_append_instead() {
 
     let assert = repo.madoqua().arg("run").assert().code(1);
     assert_eq!(
-        String::from_utf8_lossy(&assert.get_output().stderr),
+        common::stderr(&assert),
         "== fakefail failed ==\nboom\n",
         "`extend_check` keeps the repo's checks and adds the personal one"
     );
@@ -197,7 +197,7 @@ fn max_output_lines_keeps_the_head_and_counts_the_rest() {
 
     let assert = repo.madoqua().arg("run").assert().code(1);
     assert_eq!(
-        String::from_utf8_lossy(&assert.get_output().stderr),
+        common::stderr(&assert),
         "== noisy failed ==\n1\n2\n... (3 lines truncated)\n",
         "the cap is what stops a thousand-line traceback filling an agent's context"
     );
@@ -218,7 +218,7 @@ fn a_check_that_overruns_its_timeout_is_killed_and_logged_as_one() {
     let elapsed = started.elapsed();
 
     assert!(
-        String::from_utf8_lossy(&assert.get_output().stderr).contains("was killed after 1s"),
+        common::stderr(&assert).contains("was killed after 1s"),
         "the report must say why there is no tool output to show"
     );
     assert!(
@@ -237,7 +237,7 @@ fn a_missing_venv_blocks_the_commit_with_instructions() {
     repo.stage("a.py", "x = 1\n");
 
     let assert = repo.madoqua().arg("run").assert().code(1);
-    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    let stderr = common::stderr(&assert);
 
     assert!(stderr.contains("no virtualenv at"), "got: {stderr}");
     assert!(stderr.contains(".venv"), "the message names the path it wanted, got: {stderr}");
@@ -263,13 +263,36 @@ fn a_fixers_failure_does_not_stop_the_run() {
 }
 
 #[test]
+fn a_fixer_that_is_not_installed_blocks_the_commit_rather_than_claiming_to_have_run() {
+    let repo = wired();
+    repo.write(
+        "pyproject.toml",
+        "[tool.madoqua]\nfix = [\"notinstalled\"]\ncheck = [\"fakecheck\"]\n",
+    );
+    repo.stage("a.py", "x = 1\n");
+
+    let assert = repo.madoqua().arg("run").assert().code(1);
+    let stderr = common::stderr(&assert);
+
+    assert!(
+        stderr.contains("== notinstalled failed ==") && stderr.contains("cannot run"),
+        "the developer has to be told the fixer is missing; got: {stderr}"
+    );
+    assert!(
+        assert.get_output().stdout.is_empty(),
+        "`notinstalled applied & staged` would be the exact opposite of what happened"
+    );
+    assert_eq!(repo.log_records()[0]["steps"][0]["exit"], 127, "and the log says it never ran");
+}
+
+#[test]
 fn a_shell_operator_in_a_command_is_refused_before_anything_runs() {
     let repo = wired();
     repo.write("pyproject.toml", "[tool.madoqua]\ncheck = [\"fakecheck | tee out\"]\n");
     repo.stage("a.py", "x = 1\n");
 
     let assert = repo.madoqua().arg("run").assert().code(2);
-    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    let stderr = common::stderr(&assert);
     assert!(
         stderr.contains("needs a shell"),
         "a config madoqua cannot honour is a broken run, not a finding; got: {stderr}"
@@ -318,8 +341,7 @@ fn an_unwritable_log_warns_but_lets_the_commit_through() {
         "timings are a nice-to-have; blocking a commit over one would not be"
     );
     assert!(
-        String::from_utf8_lossy(&assert.get_output().stderr)
-            .contains("could not write the timing log"),
+        common::stderr(&assert).contains("could not write the timing log"),
         "but it says so, once, on stderr"
     );
 }

@@ -1,10 +1,12 @@
-//! What to run, read from `[tool.madoqua]` in the repo's `pyproject.toml` and
-//! from the personal overlay at `<repo_root>/.git/hooks.local.toml`.
+//! What to run, read from `[tool.madoqua]` in the repo's `pyproject.toml`,
+//! from the personal overlay at `<repo_root>/.git/hooks.local.toml`, and from
+//! `MADOQUA_SKIP`.
 //!
-//! Both files deserialize into the same [`Layer`], and both are applied by the
-//! same [`Config::apply`], so the merge semantics are written down once. The
-//! only impure thing in this module is reading those two files; everything
-//! that decides anything takes already-parsed data.
+//! Both files deserialize into the same `Layer`, and both are applied by the
+//! same merge, so the semantics are written down once. This module owns
+//! *everywhere the configuration is written down*, which is why the two file
+//! reads and the one environment read all live here; everything that decides
+//! anything takes already-parsed data.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -89,9 +91,18 @@ fn builtin(table: &[(&str, &str)]) -> Vec<Step> {
 }
 
 impl Config {
-    /// Resolve the configuration for `root`: built-in defaults, then
-    /// `pyproject.toml`, then the personal overlay.
+    /// Resolve the configuration for `root` against the real environment:
+    /// built-in defaults, then `pyproject.toml`, then the personal overlay,
+    /// then `MADOQUA_SKIP`.
+    ///
+    /// The environment read is the one impure line; [`Config::resolved_from`]
+    /// is the same decision over data a test can hand it.
     pub fn resolve(root: &Path) -> Result<Self> {
+        Self::resolved_from(root, &skip_var())
+    }
+
+    /// [`Config::resolve`] with the skip list supplied rather than read.
+    pub fn resolved_from(root: &Path, skip: &str) -> Result<Self> {
         let mut config = Self::default();
 
         if let Some(layer) = read_pyproject(root)? {
@@ -100,6 +111,7 @@ impl Config {
         if let Some(layer) = read_overlay(&overlay_path(root))? {
             config.apply(layer).context(".git/hooks.local.toml")?;
         }
+        config.check = filter_checks(&config.check, skip);
         Ok(config)
     }
 
@@ -129,7 +141,7 @@ impl Config {
 }
 
 /// Where the personal overlay lives.
-pub fn overlay_path(root: &Path) -> PathBuf {
+fn overlay_path(root: &Path) -> PathBuf {
     root.join(".git").join("hooks.local.toml")
 }
 
@@ -293,9 +305,17 @@ fn split_command(cmd: &str) -> Result<Vec<String>> {
 ///
 /// Skips apply to the check phase only — a skip that silently stopped the
 /// formatter would leave the working tree in a state the next run reformats.
-pub fn filter_checks(checks: &[Step], skip: &str) -> Vec<Step> {
+fn filter_checks(checks: &[Step], skip: &str) -> Vec<Step> {
     let skipped: Vec<&str> = skip.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
     checks.iter().filter(|step| !skipped.contains(&step.name.as_str())).cloned().collect()
+}
+
+/// The environment variable that drops checks from a single run.
+pub const SKIP_VAR: &str = "MADOQUA_SKIP";
+
+/// Read [`SKIP_VAR`]. Absent and empty mean the same thing: skip nothing.
+fn skip_var() -> String {
+    std::env::var(SKIP_VAR).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -492,5 +512,38 @@ mod tests {
             "matching is exact, not a prefix — `ty` is not `ty check`"
         );
         assert_eq!(names(&filter_checks(&checks, "")), ["ruff check", "ty check"]);
+    }
+
+    #[test]
+    fn resolving_applies_the_skip_list_as_the_last_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            "[tool.madoqua]\ncheck = [\"ruff check --quiet\", \"ty check\"]\n",
+        )
+        .unwrap();
+
+        let config = Config::resolved_from(dir.path(), "ty check").unwrap();
+        assert_eq!(
+            names(&config.check),
+            ["ruff check"],
+            "MADOQUA_SKIP is the last word on what runs, after both files"
+        );
+        assert_eq!(
+            names(&config.fix),
+            ["ruff fix", "ruff format"],
+            "and it never touches the fix phase: half-formatted files are worse than none"
+        );
+    }
+
+    #[test]
+    fn a_command_that_is_all_flags_still_gets_a_name() {
+        let argv = ["--fix".to_owned(), "x".to_owned()];
+        assert_eq!(
+            derive_name(&argv),
+            "--fix",
+            "an unnameable step still needs something for MADOQUA_SKIP and the verdict to say"
+        );
+        assert_eq!(derive_name(&[]), "", "and an empty argv cannot name anything");
     }
 }

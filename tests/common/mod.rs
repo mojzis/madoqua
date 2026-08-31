@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
 use assert_cmd::Command;
+use assert_cmd::assert::Assert;
 use tempfile::TempDir;
 
 /// A throwaway git repository with a stub virtualenv.
@@ -128,6 +129,17 @@ impl Repo {
         madoqua(self.path())
     }
 
+    /// Commit through git, with the built binary on `PATH` so the shim's
+    /// `exec madoqua run` resolves. Returns the raw output: whether the commit
+    /// was allowed through is the thing under test.
+    pub fn commit(&self, message: &str) -> std::process::Output {
+        self.git_command()
+            .args(["commit", "-m", message])
+            .env("PATH", path_with_binary())
+            .output()
+            .expect("git is runnable")
+    }
+
     /// The parsed timing log, one entry per line.
     pub fn log_records(&self) -> Vec<serde_json::Value> {
         self.read(".git/hook-timings.jsonl")
@@ -165,6 +177,16 @@ pub fn binary_dir() -> PathBuf {
 pub fn path_with_binary() -> String {
     let existing = std::env::var("PATH").unwrap_or_default();
     format!("{}:{existing}", binary_dir().display())
+}
+
+/// A finished command's stdout.
+pub fn stdout(assert: &Assert) -> String {
+    String::from_utf8_lossy(&assert.get_output().stdout).into_owned()
+}
+
+/// A finished command's stderr.
+pub fn stderr(assert: &Assert) -> String {
+    String::from_utf8_lossy(&assert.get_output().stderr).into_owned()
 }
 
 /// The single line a clean run prints, with the trailing newline removed.

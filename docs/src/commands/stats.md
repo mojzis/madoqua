@@ -65,6 +65,11 @@ One JSON object per run, appended to
   unambiguous and sorts, which matters for a log several machines may share.
 - `head` is the short sha of the *parent* — the commit being made does not
   exist yet.
+- `exit` is the tool's own code, or `-1` when madoqua killed it for outliving
+  its timeout, or `127` when the tool never ran at all. A tool killed by
+  something else — a segfault, an external `kill` — is recorded as
+  `128 + signal`, as a shell would report it, so `-1` keeps meaning exactly one
+  thing.
 - `timed_out: true` appears only on a step madoqua killed, which also carries
   `"exit": -1`.
 - `repo` appears only when the log lives outside the repository.

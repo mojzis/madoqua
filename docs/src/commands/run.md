@@ -20,7 +20,9 @@ madoqua run
    Nothing staged in Python means exit `0` with no output and no log entry.
 3. **Fix phase.** Sequentially, in configuration order. A fixer's non-zero exit
    does not stop the run: `ruff check --fix` exits non-zero for what it could
-   *not* fix, and the check phase is about to report exactly that.
+   *not* fix, and the check phase is about to report exactly that. A fixer
+   madoqua cannot *find* is different — nothing downstream reports a missing
+   `ruff format` — so that blocks the commit.
 4. **`git add`** the staged file list, so what the fixers wrote is what gets
    committed.
 5. **Check phase.** Every check at once, on its own thread, with stdout and
@@ -58,5 +60,5 @@ overlay semantics in short form.
 | Code | When |
 |---|---|
 | `0` | Every check passed, or there was nothing staged to check |
-| `1` | A check failed or timed out, or the virtualenv guard refused |
+| `1` | A check failed or timed out, a fixer could not be run, or the virtualenv guard refused |
 | `2` | madoqua could not run: not a repository, unreadable config, a command it cannot honour |

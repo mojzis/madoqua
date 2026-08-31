@@ -13,13 +13,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use crate::cli::Outcome;
-use crate::config::{Config, Phase, filter_checks};
+use crate::config::{Config, Phase};
 use crate::report::{RunRecord, StepRecord};
 use crate::runner::StepResult;
 use crate::{clock, git, runner, timelog, venv};
-
-/// The environment variable that drops checks from a single run.
-pub const SKIP_VAR: &str = "MADOQUA_SKIP";
 
 /// Run the hook for the repository containing `start`.
 ///
@@ -53,14 +50,12 @@ pub fn run(start: &Path, out: &mut impl Write) -> Result<Outcome> {
         git::add(&root, &files).context("cannot re-stage the files the fixers rewrote")?;
     }
 
-    let checks = filter_checks(&config.check, &skip_list());
-    steps.extend(runner::run_checks(&root, &checks, &files, &venv.env));
+    steps.extend(runner::run_checks(&root, &config.check, &files, &venv.env));
 
     let total = started.elapsed();
     write_log(&root, &config, &files, &steps, venv.auto_activated, total);
 
-    let failures: Vec<&StepResult> =
-        steps.iter().filter(|step| step.phase == Phase::Check && step.failed()).collect();
+    let failures: Vec<&StepResult> = steps.iter().filter(|step| blocks(step)).collect();
 
     if failures.is_empty() {
         writeln!(out, "{}", success_line(files.len(), total, &steps, venv.auto_activated))?;
@@ -71,8 +66,18 @@ pub fn run(start: &Path, out: &mut impl Write) -> Result<Outcome> {
     }
 }
 
-fn skip_list() -> String {
-    std::env::var(SKIP_VAR).unwrap_or_default()
+/// Whether a step is a reason to refuse the commit.
+///
+/// A fixer that exits non-zero is not: `ruff check --fix` exits non-zero for
+/// what it could not fix, and the check that follows is about to say so. A
+/// fixer that *never ran* is, because no check is going to report it — a
+/// missing `ruff format` leaves `ruff check` perfectly happy, and the commit
+/// would record unformatted code under a verdict claiming it was formatted.
+fn blocks(step: &StepResult) -> bool {
+    match step.phase {
+        Phase::Check => step.failed(),
+        Phase::Fix => step.could_not_start(),
+    }
 }
 
 /// Append the run to the timing log, and never let that stop a commit.
@@ -119,7 +124,7 @@ fn millis(duration: Duration) -> u64 {
 /// The timings are in it because they are the cheapest possible nudge: a hook
 /// that quietly grew to four seconds is one nobody notices until they start
 /// committing less often.
-pub fn success_line(
+fn success_line(
     files: usize,
     total: Duration,
     steps: &[StepResult],
@@ -152,7 +157,7 @@ pub fn success_line(
 }
 
 /// What a failing run prints: the failing tools, and only those.
-pub fn failure_report(failures: &[&StepResult]) -> String {
+fn failure_report(failures: &[&StepResult]) -> String {
     let mut out = String::new();
     for step in failures {
         let _ = writeln!(out, "== {} failed ==", step.name);
@@ -192,6 +197,27 @@ mod tests {
             step("ruff check", Phase::Check, 55, 0, ""),
             step("ty check", Phase::Check, 1620, 0, ""),
         ]
+    }
+
+    #[test]
+    fn a_fixer_that_complained_does_not_block_but_one_that_never_ran_does() {
+        let complained = step("ruff fix", Phase::Fix, 41, 1, "");
+        let missing = step("ruff format", Phase::Fix, 0, 127, "madoqua: cannot run `ruff`\n");
+
+        assert!(
+            !blocks(&complained),
+            "`ruff check --fix` exits non-zero for what it could not fix; the check says so"
+        );
+        assert!(
+            blocks(&missing),
+            "no check reports a missing formatter, so the commit would record unformatted code"
+        );
+    }
+
+    #[test]
+    fn a_check_that_passed_does_not_block_and_one_that_failed_does() {
+        assert!(!blocks(&step("ty check", Phase::Check, 1, 0, "")));
+        assert!(blocks(&step("ty check", Phase::Check, 1, 1, "nope\n")));
     }
 
     #[test]

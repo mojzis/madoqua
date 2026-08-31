@@ -59,12 +59,17 @@ Four lines of semantics, also in `madoqua run --help`:
 ## Skipping a check once
 
 ```sh
-MADOQUA_SKIP="ty,ruff check" git commit -m "wip"
+MADOQUA_SKIP="ty check" git commit -m "wip"
 ```
 
-Comma-separated step *names*, matched exactly. It filters the check phase only:
-skipping the formatter would leave the working tree in a state the next run
-reformats anyway.
+Comma-separated step *names*, matched exactly — the built-in registry's names
+are `ruff check` and `ty check`, and a table entry's `name` overrides that, so
+`MADOQUA_SKIP="ty"` against the defaults silently skips nothing. It filters the
+check phase only: skipping the formatter would leave the working tree in a
+state the next run reformats anyway.
+
+`fix` is not skippable, and a fixer madoqua cannot find blocks the commit
+rather than being reported as applied — no check reports a missing formatter.
 
 ## Where timings go
 

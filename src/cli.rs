@@ -7,7 +7,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::config::Config;
@@ -86,7 +86,8 @@ impl Cli {
     pub fn run(&self, out: &mut impl Write) -> Result<Outcome> {
         let start = match &self.root {
             Some(root) => root.clone(),
-            None => std::env::current_dir()?,
+            None => std::env::current_dir()
+                .context("cannot determine the current directory; pass --root")?,
         };
 
         match self.command.as_ref().unwrap_or(&Command::Run) {
@@ -101,12 +102,8 @@ impl Cli {
     fn install(out: &mut impl Write, start: &Path) -> Result<Outcome> {
         let root = git::repo_root(start)?;
         let shim = install::install(&root)?;
-        writeln!(
-            out,
-            "installed {} and set core.hooksPath={}",
-            shim.display(),
-            install::HOOKS_DIR
-        )?;
+        writeln!(out, "installed {} and set core.hooksPath={}", shim.display(), install::HOOKS_DIR)
+            .context("cannot write to stdout")?;
         Ok(Outcome::Clean)
     }
 
@@ -127,10 +124,11 @@ impl Cli {
         let report = stats::summarise(&records, days, repo, clock::now_unix());
 
         if json {
-            serde_json::to_writer_pretty(&mut *out, &report)?;
-            writeln!(out)?;
+            serde_json::to_writer_pretty(&mut *out, &report)
+                .context("cannot write the report to stdout")?;
+            writeln!(out).context("cannot write to stdout")?;
         } else {
-            write!(out, "{}", stats::render(&report))?;
+            write!(out, "{}", stats::render(&report)).context("cannot write to stdout")?;
         }
         Ok(Outcome::Clean)
     }

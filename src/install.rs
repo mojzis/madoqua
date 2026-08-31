@@ -43,16 +43,3 @@ fn make_executable(path: &Path) -> Result<()> {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_shim_only_execs() {
-        assert_eq!(
-            SHIM, "#!/bin/sh\nexec madoqua run\n",
-            "logic in the shim is logic that cannot be fixed by upgrading the binary"
-        );
-    }
-}

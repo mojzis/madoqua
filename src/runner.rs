@@ -6,6 +6,7 @@
 //! Each step times itself inside its own thread, so a check's recorded
 //! duration is how long the tool took and not how long it waited to be joined.
 
+use std::any::Any;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -19,9 +20,20 @@ use crate::venv::ChildEnv;
 /// How often a timed step asks whether its child has finished.
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-/// The exit code recorded for a step we killed, and for one we could not start.
-const EXIT_TIMED_OUT: i32 = -1;
-const EXIT_NOT_RUN: i32 = 127;
+/// The exit code recorded for a step madoqua killed for running too long.
+///
+/// It has to keep meaning exactly that, so a child that died of a signal is
+/// recorded as `128 + signal` rather than sharing this code.
+pub const EXIT_TIMED_OUT: i32 = -1;
+
+/// The exit code recorded for a step that never ran at all.
+///
+/// An uninstalled tool, an empty command, or a child madoqua lost track of.
+pub const EXIT_NOT_RUN: i32 = 127;
+
+/// The shell's convention for "died of signal N".
+#[cfg(unix)]
+const SIGNAL_BASE: i32 = 128;
 
 /// What one step did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +44,9 @@ pub struct StepResult {
     pub phase: Phase,
     /// Wall-clock time for the tool itself.
     pub duration: Duration,
-    /// The process's exit code, or [`EXIT_TIMED_OUT`] when we killed it.
+    /// The process's exit code, [`EXIT_TIMED_OUT`] when madoqua killed it,
+    /// `128 + signal` when something else did, or [`EXIT_NOT_RUN`] when it
+    /// never started.
     pub exit: i32,
     /// Whether the step ran out of time.
     pub timed_out: bool,
@@ -45,6 +59,13 @@ impl StepResult {
     /// a failing fixer is reported by the check that follows it, not by itself.
     pub fn failed(&self) -> bool {
         self.timed_out || self.exit != 0
+    }
+
+    /// Whether the tool never ran — it is not installed, or madoqua lost the
+    /// child. Distinct from "it ran and complained", because a fixer that was
+    /// never there must not be reported as having been applied.
+    pub fn could_not_start(&self) -> bool {
+        self.exit == EXIT_NOT_RUN
     }
 }
 
@@ -79,26 +100,36 @@ pub fn run_checks(
         handles
             .into_iter()
             .zip(steps)
-            .map(|(handle, step)| handle.join().unwrap_or_else(|_| panicked(step)))
+            .map(|(handle, step)| {
+                handle.join().unwrap_or_else(|payload| panicked(step, payload.as_ref()))
+            })
             .collect()
     })
 }
 
 /// A step whose thread panicked is reported as a failure rather than taking
 /// the whole run down — the developer still gets the other checks' output.
-fn panicked(step: &Step) -> StepResult {
+fn panicked(step: &Step, payload: &(dyn Any + Send)) -> StepResult {
+    // The panic message is the whole diagnostic value of this path, and it
+    // only exists inside the payload.
+    let message = payload
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "no message".to_owned());
+
     StepResult {
         name: step.name.clone(),
         phase: Phase::Check,
         duration: Duration::ZERO,
         exit: EXIT_NOT_RUN,
         timed_out: false,
-        output: format!("madoqua: the thread running `{}` panicked\n", step.name),
+        output: format!("madoqua: the thread running `{}` panicked: {message}\n", step.name),
     }
 }
 
 /// Run one step and capture what it said.
-pub fn run_step(
+fn run_step(
     root: &Path,
     step: &Step,
     files: &[String],
@@ -110,8 +141,8 @@ pub fn run_step(
     let duration = started.elapsed();
 
     let (exit, timed_out, output) = match outcome {
-        Ok((Some(status), output)) => (status.code().unwrap_or(EXIT_TIMED_OUT), false, output),
-        Ok((None, output)) => (
+        Spawned::Finished(status, output) => (exit_code(status), false, output),
+        Spawned::Killed(output) => (
             EXIT_TIMED_OUT,
             true,
             format!(
@@ -120,7 +151,7 @@ pub fn run_step(
                 step.timeout.unwrap_or_default().as_secs()
             ),
         ),
-        Err(message) => (EXIT_NOT_RUN, false, message),
+        Spawned::NeverStarted(message) => (EXIT_NOT_RUN, false, message),
     };
 
     StepResult {
@@ -133,17 +164,43 @@ pub fn run_step(
     }
 }
 
-/// `Ok((None, _))` means the child was killed for running too long. `Err` means
-/// it never started, which is a normal thing for a hook to report: an
-/// uninstalled tool is a finding, not a crash.
-fn spawn_and_wait(
-    root: &Path,
-    step: &Step,
-    files: &[String],
-    env: &ChildEnv,
-) -> Result<(Option<ExitStatus>, String), String> {
-    let (program, args) =
-        step.argv.split_first().ok_or_else(|| "madoqua: empty command\n".to_owned())?;
+/// The exit code to record for a finished child.
+///
+/// A child killed by a signal has no exit code of its own, so it gets the
+/// shell's `128 + signal`: [`EXIT_TIMED_OUT`] has to keep meaning exactly
+/// "madoqua killed this one", or the log cannot tell a timeout from a segfault.
+fn exit_code(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return SIGNAL_BASE + signal;
+        }
+    }
+    EXIT_NOT_RUN
+}
+
+/// How a spawn ended. The three cases are genuinely different verdicts, and
+/// collapsing them is how a missing tool ends up reported as a timeout: an
+/// uninstalled tool is a normal thing for a hook to report, but it is not the
+/// same as one madoqua had to kill.
+enum Spawned {
+    /// The tool ran to completion. Carries its status and its output.
+    Finished(ExitStatus, String),
+    /// madoqua killed it for outliving its timeout. Carries what it had said.
+    Killed(String),
+    /// It never ran, or madoqua lost track of the child. Carries the whole
+    /// message to show the developer.
+    NeverStarted(String),
+}
+
+fn spawn_and_wait(root: &Path, step: &Step, files: &[String], env: &ChildEnv) -> Spawned {
+    let Some((program, args)) = step.argv.split_first() else {
+        return Spawned::NeverStarted("madoqua: empty command\n".to_owned());
+    };
 
     let mut command = Command::new(program);
     command
@@ -161,8 +218,12 @@ fn spawn_and_wait(
         command.args(files);
     }
 
-    let mut child =
-        command.spawn().map_err(|err| format!("madoqua: cannot run `{program}`: {err}\n"))?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            return Spawned::NeverStarted(format!("madoqua: cannot run `{program}`: {err}\n"));
+        }
+    };
 
     // Drain both pipes on their own threads. A tool that writes more than a
     // pipe buffer would otherwise block forever waiting for us to read, and we
@@ -170,8 +231,8 @@ fn spawn_and_wait(
     let stdout = child.stdout.take().map(Reader::draining);
     let stderr = child.stderr.take().map(Reader::draining);
 
-    let status = match step.timeout {
-        None => child.wait().ok(),
+    let waited = match step.timeout {
+        None => child.wait().map(Some),
         Some(limit) => wait_with_timeout(&mut child, limit),
     };
 
@@ -179,10 +240,18 @@ fn spawn_and_wait(
     // a timeout, take whatever they have: the killed process may have left a
     // descendant holding the write end of the pipe, and waiting for that would
     // undo the timeout we just enforced.
-    let collected = status.is_some();
+    let collected = matches!(waited, Ok(Some(_)));
     let mut output = stdout.map_or_else(String::new, |reader| reader.finish(collected));
     output.push_str(&stderr.map_or_else(String::new, |reader| reader.finish(collected)));
-    Ok((status, output))
+
+    match waited {
+        Ok(Some(status)) => Spawned::Finished(status, output),
+        Ok(None) => Spawned::Killed(output),
+        Err(err) => Spawned::NeverStarted(format!(
+            "madoqua: lost track of `{}`: {err}\n{output}",
+            step.name
+        )),
+    }
 }
 
 /// A pipe being drained on its own thread, whose buffer can be read before the
@@ -223,19 +292,22 @@ impl Reader {
     }
 }
 
-/// Wait for `child`, killing it once `limit` has passed. `None` means killed.
-fn wait_with_timeout(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
+/// Wait for `child`, killing it once `limit` has passed.
+///
+/// `Ok(None)` means madoqua killed it. `Err` means madoqua could not tell what
+/// the child was doing, which is a different thing and must not be reported as
+/// a timeout — `was killed after 0s` about a step nobody killed is worse than
+/// no message.
+fn wait_with_timeout(child: &mut Child, limit: Duration) -> std::io::Result<Option<ExitStatus>> {
     let deadline = Instant::now() + limit;
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
-            Err(_) => return None,
-            Ok(None) => {}
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return None;
+            return Ok(None);
         }
         thread::sleep(POLL_INTERVAL);
     }
@@ -246,7 +318,7 @@ fn wait_with_timeout(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
 /// The head is what survives: a linter's first complaints are the ones worth
 /// reading, and this cap exists so a thousand-line traceback does not fill an
 /// agent's context window.
-pub fn truncate(output: &str, max: Option<usize>) -> String {
+fn truncate(output: &str, max: Option<usize>) -> String {
     let Some(max) = max else { return output.to_owned() };
 
     let total = output.lines().count();
@@ -352,6 +424,45 @@ mod tests {
             "the output must name the tool, got: {:?}",
             result.output
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_step_killed_by_a_signal_is_not_confused_with_one_madoqua_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_step(
+            dir.path(),
+            &step("suicidal", &["sh", "-c", "kill -9 $$"]),
+            &[],
+            &env(),
+            Phase::Check,
+        );
+
+        assert_eq!(result.exit, SIGNAL_BASE + 9, "a signal death is `128 + signal`, as in a shell");
+        assert!(!result.timed_out, "nothing timed it out");
+        assert!(result.failed(), "and it still blocks the commit");
+    }
+
+    #[test]
+    fn a_step_that_could_not_start_says_so_and_a_step_that_merely_failed_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = run_step(
+            dir.path(),
+            &step("ghost", &["madoqua-no-such-tool"]),
+            &[],
+            &env(),
+            Phase::Check,
+        );
+        let complained = run_step(
+            dir.path(),
+            &step("grumpy", &["sh", "-c", "exit 1"]),
+            &[],
+            &env(),
+            Phase::Check,
+        );
+
+        assert!(missing.could_not_start(), "an uninstalled tool never ran");
+        assert!(!complained.could_not_start(), "a tool that exited 1 did run and had an opinion");
     }
 
     #[test]

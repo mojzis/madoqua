@@ -10,7 +10,7 @@ How the crate is put together. For *why*, and what each choice cost, see
 | `main.rs` | Parse arguments, set up tracing, map `Outcome` to an exit code. Nothing else. | |
 | `cli.rs` | The `clap` definitions and the body of every command. | |
 | `hook.rs` | The pipeline, and the wording of the verdict. | |
-| `config.rs` | What to run: `[tool.madoqua]`, the `.git/hooks.local.toml` overlay, the merge rules, command splitting. | reads two files |
+| `config.rs` | What to run: `[tool.madoqua]`, the `.git/hooks.local.toml` overlay, `MADOQUA_SKIP`, the merge rules, command splitting. | reads two files and one variable |
 | `stats.rs` | Percentiles and the table. Pure. | |
 | `report.rs` | The JSON wire formats — the log record and `stats --json`. Field names here are public contract. | |
 | `git.rs` | **Every** `git` invocation in the crate. | yes |
@@ -18,6 +18,7 @@ How the crate is put together. For *why*, and what each choice cost, see
 | `venv.rs` | The virtualenv guard and the `PATH` children inherit. `plan` is pure; `guard` is the one-line impure wrapper. | yes |
 | `timelog.rs` | Resolving the log path (`~`, in-repo or not) and appending to it. | yes |
 | `clock.rs` | The wall clock, and RFC 3339 without a date crate. | yes |
+| `install.rs` | Write the `hooks/pre-commit` shim and point git at it. | writes three things, once |
 
 ## Dependencies
 

@@ -97,8 +97,11 @@ pub fn render(report: &StatsReport) -> String {
     rows.extend(report.steps.iter().map(|step| row(&step.name, step.summary)));
     rows.push(row("total run", report.total));
 
-    let widths: Vec<usize> =
-        (0..5).map(|column| rows.iter().map(|r| r[column].len()).max().unwrap_or(0)).collect();
+    // In characters, not bytes: step names come from user config, and `{:<n}`
+    // pads by character, so one non-ASCII name would misalign every row below.
+    let widths: Vec<usize> = (0..5)
+        .map(|column| rows.iter().map(|r| r[column].chars().count()).max().unwrap_or(0))
+        .collect();
 
     let last = rows.len() - 1;
     let mut out = String::new();

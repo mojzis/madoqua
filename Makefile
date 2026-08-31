@@ -1,12 +1,12 @@
-.PHONY: review review-quick fmt-check lint test audit deny coverage mutants docs docs-serve docs-toolchain wheel
+.PHONY: review review-quick fmt-check lint test doc audit deny coverage mutants docs docs-serve docs-toolchain wheel
 
 # Full review — run before pushing or merging
-review: fmt-check lint test audit deny
+review: fmt-check lint test doc audit deny
 	@echo ""
 	@echo "✅ All review checks passed"
 
 # Quick review — skip slower network checks
-review-quick: fmt-check lint test
+review-quick: fmt-check lint test doc
 	@echo ""
 	@echo "✅ Quick review passed"
 
@@ -25,6 +25,12 @@ test:
 	else \
 		cargo test --all-features; \
 	fi
+
+# Broken intra-doc links render as plain text on docs.rs and nothing else
+# catches them, so they are part of the lint gate rather than of `make docs`.
+doc:
+	@echo "📖 Checking rustdoc..."
+	@RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
 audit:
 	@echo "🔒 Running security audit..."

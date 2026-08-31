@@ -80,7 +80,10 @@ invariant the code no longer upholds is a bug in one of the two.
   that failed. Anything else you are tempted to say goes on stderr, or nowhere.
 - **The fix phase is sequential and the check phase is parallel.** Fixers
   rewrite the same files in a meaningful order; checks are read-only. A fixer's
-  non-zero exit is never fatal — the check that follows reports it.
+  non-zero exit is never fatal — the check that follows reports it. A fixer
+  that could not be *started* is fatal, because no check follows a tool that
+  isn't installed, and a verdict saying `applied & staged` about it would be
+  the exact opposite of what happened.
 - **Logging is best-effort.** A failure to write the timing log warns on stderr
   and the commit proceeds. Nothing about timings may ever block a commit.
 - **A no-op run is not logged.** Runs with no staged Python files write
@@ -92,7 +95,8 @@ invariant the code no longer upholds is a bug in one of the two.
   environment lookup belongs in a module that exists to do it, and everything
   downstream of a seam takes already-parsed data. That is what keeps the rules
   unit-testable with nothing installed. A new seam needs an ADR, not a
-  conveniently placed `Command::new`.
+  conveniently placed `Command::new` — and `hook.rs` is not a seam, so an
+  `std::env::var` in it is a bug in the layout (ADR 0002).
 - **Logs go to stderr, output to stdout.** `init_tracing` writes to stderr on
   purpose: a `--json` run must be pipeable into `jq` with `--verbose` on.
 - **`clippy::unwrap_used` / `expect_used` warn outside tests, and the documented

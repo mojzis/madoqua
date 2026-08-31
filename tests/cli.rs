@@ -9,7 +9,7 @@ use predicates::prelude::*;
 fn help_lists_the_commands() {
     let dir = tempfile::tempdir().unwrap();
     let assert = common::madoqua(dir.path()).arg("--help").assert().success();
-    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let stdout = common::stdout(&assert);
 
     for command in ["run", "install", "stats"] {
         assert!(stdout.contains(command), "`{command}` is missing from --help:\n{stdout}");
@@ -20,7 +20,7 @@ fn help_lists_the_commands() {
 fn the_run_help_documents_the_overlay_semantics() {
     let dir = tempfile::tempdir().unwrap();
     let assert = common::madoqua(dir.path()).args(["run", "--help"]).assert().success();
-    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let stdout = common::stdout(&assert);
 
     for phrase in ["hooks.local.toml", "extend_check", "MADOQUA_SKIP"] {
         assert!(stdout.contains(phrase), "`{phrase}` belongs in --help:\n{stdout}");
@@ -33,7 +33,9 @@ fn an_unknown_command_fails_without_panicking() {
     common::madoqua(dir.path())
         .arg("no-such-command")
         .assert()
-        .failure()
+        // A usage error is madoqua unable to do its job, not a finding about
+        // the code — exit 1 here would be a contract regression.
+        .code(2)
         .stderr(predicate::str::contains("panicked").not());
 }
 
@@ -48,14 +50,47 @@ fn running_outside_a_repository_could_not_complete_rather_than_finding_something
 }
 
 #[test]
+fn root_runs_against_another_repository_and_walks_up_to_its_root() {
+    let repo = Repo::new();
+    repo.tool("fakecheck", "exit 0");
+    repo.write("pyproject.toml", "[tool.madoqua]\nfix = []\ncheck = [\"fakecheck\"]\n");
+    repo.stage("src/a.py", "x = 1\n");
+
+    // Standing somewhere else entirely, and pointing at a subdirectory rather
+    // than the root: finding the root is `--root`'s whole job.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let assert = common::madoqua(elsewhere.path())
+        .args(["--root".as_ref(), repo.path().join("src").as_os_str()])
+        .arg("run")
+        .assert()
+        .success();
+
+    assert!(
+        common::only_line(&assert.get_output().stdout).starts_with("pre-commit ok (1 py files"),
+        "got: {}",
+        common::stdout(&assert)
+    );
+}
+
+#[test]
+fn root_pointing_outside_a_repository_could_not_complete() {
+    let here = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+
+    common::madoqua(here.path())
+        .args(["--root".as_ref(), elsewhere.path().as_os_str()])
+        .arg("run")
+        .env("GIT_CEILING_DIRECTORIES", elsewhere.path())
+        .assert()
+        .code(2);
+}
+
+#[test]
 fn install_writes_an_executable_shim_and_points_git_at_it() {
     let repo = Repo::new();
 
     let assert = repo.madoqua().arg("install").assert().success();
-    assert!(
-        String::from_utf8_lossy(&assert.get_output().stdout).contains("hooks/pre-commit"),
-        "install says what it did"
-    );
+    assert!(common::stdout(&assert).contains("hooks/pre-commit"), "install says what it did");
 
     let shim = repo.path().join("hooks/pre-commit");
     assert_eq!(std::fs::read_to_string(&shim).unwrap(), "#!/bin/sh\nexec madoqua run\n");
@@ -95,12 +130,7 @@ fn an_installed_hook_runs_on_a_real_commit_and_logs_it() {
     repo.madoqua().arg("install").assert().success();
     repo.stage("a.py", "x = 1\n");
 
-    let output = repo
-        .git_command()
-        .args(["commit", "-m", "add a.py"])
-        .env("PATH", common::path_with_binary())
-        .output()
-        .unwrap();
+    let output = repo.commit("add a.py");
 
     assert!(
         output.status.success(),
@@ -131,12 +161,7 @@ fn a_blocked_commit_does_not_become_a_commit() {
     repo.madoqua().arg("install").assert().success();
     repo.stage("a.py", "x = 1\n");
 
-    let output = repo
-        .git_command()
-        .args(["commit", "-m", "add a.py"])
-        .env("PATH", common::path_with_binary())
-        .output()
-        .unwrap();
+    let output = repo.commit("add a.py");
 
     assert!(!output.status.success(), "exit 1 from the hook has to stop the commit");
     assert!(
@@ -162,7 +187,7 @@ fn stats_renders_a_table_of_what_the_log_holds() {
     repo.madoqua().arg("run").assert().success();
 
     let assert = repo.madoqua().arg("stats").assert().success();
-    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let stdout = common::stdout(&assert);
     let lines: Vec<&str> = stdout.lines().collect();
 
     assert!(lines[0].starts_with("step"), "the table has a header: {stdout}");
@@ -183,7 +208,7 @@ fn stats_json_carries_the_same_numbers_and_stays_clean() {
     repo.madoqua().arg("run").assert().success();
 
     let assert = repo.madoqua().args(["stats", "--json", "--days", "7"]).assert().success();
-    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+    let stdout = common::stdout(&assert);
     let report: serde_json::Value =
         serde_json::from_str(&stdout).unwrap_or_else(|err| panic!("not JSON: {err}\n{stdout}"));
 

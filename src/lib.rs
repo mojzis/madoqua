@@ -2,11 +2,13 @@
 //! and say one line about it.
 //!
 //! The crate is split so that the rules are testable without touching the
-//! world. [`config`] decides what to run, [`hook`] decides what to say,
-//! [`stats`] decides what the log means — none of them spawn anything. The
-//! impure parts are named after what they touch: [`git`] is every `git`
-//! invocation, [`runner`] is every other process, [`venv`] is `PATH`,
-//! [`timelog`] is the log file, [`clock`] is the wall clock.
+//! world. [`hook`] is the pipeline: it decides what the run means and what to
+//! say about it, and it reaches the world only through the seams. The seams
+//! are named after what they touch: [`git`] is every `git` invocation,
+//! [`runner`] is every other process, [`venv`] is `PATH`, [`timelog`] is the
+//! log file, [`clock`] is the wall clock, [`config`] is everywhere the
+//! configuration is written down, and [`install`] writes the shim. [`stats`]
+//! and [`report`] touch nothing at all.
 //!
 //! See `docs/dev/ARCHITECTURE.md`, and `docs/adr/` for why the shape is what
 //! it is.
