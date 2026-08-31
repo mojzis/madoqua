@@ -7,8 +7,9 @@
 //! are named after what they touch: [`git`] is every `git` invocation,
 //! [`runner`] is every other process, [`venv`] is `PATH`, [`timelog`] is the
 //! log file, [`clock`] is the wall clock, [`config`] is everywhere the
-//! configuration is written down, and [`install`] writes the shim. [`stats`]
-//! and [`report`] touch nothing at all.
+//! configuration is written down, [`install`] writes the shim, and
+//! [`guide`] reads a directory to see whether madoqua is wired into it.
+//! [`stats`] and [`report`] touch nothing at all.
 //!
 //! See `docs/dev/ARCHITECTURE.md`, and `docs/adr/` for why the shape is what
 //! it is.

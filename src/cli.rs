@@ -82,9 +82,10 @@ pub enum Command {
 
     /// Print setup, triage or tune instructions for this repository
     ///
-    /// With no topic, prints `setup` when madoqua is not wired into the current
-    /// directory and `triage` when it is; `tune` is never auto-selected.
-    /// Detection looks at the current directory only and never walks up, so run
+    /// With no topic, prints `setup` when madoqua is not wired into the
+    /// directory it is pointed at and `triage` when it is; `tune` is never
+    /// auto-selected. That directory is `--root` when given and the current
+    /// one otherwise; detection looks at it alone and never walks up, so point
     /// this at the repository root.
     Guide {
         /// Which instructions to print. Omit to let madoqua choose.
@@ -115,10 +116,11 @@ impl Cli {
 
     /// Print a guide, resolving the topic against `dir` when none was named.
     ///
-    /// `dir` rather than the repository root: the question auto-selection
-    /// answers is "is madoqua set up where I am standing", and the guide tells
-    /// its reader to stand at the repository root. Like `stats`, this is an
-    /// inventory and never returns `1`.
+    /// `dir` is where the caller pointed us — `--root`, or the current
+    /// directory — and is used as given rather than walked up from: the
+    /// question auto-selection answers is "is madoqua set up *here*", and the
+    /// guide tells its reader to point it at the repository root. Like
+    /// `stats`, this is an inventory and never returns `1`.
     fn guide_in(out: &mut impl Write, dir: &Path, topic: Option<Topic>) -> Result<Outcome> {
         let text = if let Some(topic) = topic {
             guide::render(topic, guide::Selection::Explicit)
@@ -219,7 +221,7 @@ mod tests {
     #[test]
     fn every_command_shown_in_a_guide_parses() {
         let mut checked = 0_usize;
-        for topic in Topic::ALL {
+        for topic in Topic::all() {
             for argv in guide::embedded_invocations(topic) {
                 checked += 1;
                 let parsed = Cli::command().try_get_matches_from(&argv);
@@ -256,7 +258,7 @@ mod tests {
             .and_then(clap::Command::get_long_about)
             .map(std::string::ToString::to_string)
             .unwrap_or_default();
-        for phrase in ["setup", "triage", "never auto-selected", "repository root"] {
+        for phrase in ["setup", "triage", "never auto-selected", "repository root", "--root"] {
             assert!(help.contains(phrase), "guide --help should say `{phrase}`: {help}");
         }
     }
@@ -286,6 +288,29 @@ mod tests {
         assert_eq!(
             String::from_utf8(out).unwrap(),
             guide::render(Topic::Tune, guide::Selection::Explicit),
+        );
+    }
+
+    /// `guide.md` promises `2` when the output cannot be written, and a
+    /// promise nothing exercises is a guess.
+    #[test]
+    fn a_guide_that_cannot_be_written_could_not_complete() {
+        struct Broken;
+
+        impl Write for Broken {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let err = Cli::guide_in(&mut Broken, Path::new("."), Some(Topic::Tune))
+            .expect_err("a write that fails is madoqua unable to do its job");
+        assert!(
+            format!("{err:#}").contains("cannot write to stdout"),
+            "the error must name the operation, got: {err:#}"
         );
     }
 

@@ -323,7 +323,11 @@ fn skip_var() -> String {
 /// Asked of serde rather than written down, so a renamed field cannot leave a
 /// stale list behind: [`crate::guide`] checks every config key its pages name
 /// against this, and a hand-maintained list would drift the moment a key moved.
-pub mod keys {
+///
+/// Test-only, and gated as such: this answers a question about the schema that
+/// only the guide tests ask, and none of it belongs in a shipped binary.
+#[cfg(test)]
+pub(crate) mod keys {
     use std::collections::BTreeSet;
     use std::fmt;
 
@@ -336,7 +340,7 @@ pub mod keys {
     /// which is the only way out of a `Deserializer` that refuses to produce a
     /// value.
     #[derive(Debug)]
-    pub struct Captured(Vec<&'static str>);
+    struct Captured(Vec<&'static str>);
 
     impl fmt::Display for Captured {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -383,6 +387,11 @@ pub mod keys {
     fn field_names<T: serde::de::DeserializeOwned>() -> Vec<&'static str> {
         match T::deserialize(FieldCapture) {
             Err(Captured(fields)) => fields,
+            // Unreachable for a derived struct impl, which always reaches
+            // `deserialize_struct` and always returns `Err`. Left as an empty
+            // list rather than a panic (`clippy::panic` is warned crate-wide):
+            // an empty list fails `the_layer_and_step_keys_are_all_there`
+            // loudly instead of passing vacuously.
             Ok(_) => Vec::new(),
         }
     }

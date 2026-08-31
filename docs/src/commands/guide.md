@@ -18,9 +18,10 @@ madoqua guide tune     # the key reference
 
 ## Choosing a topic
 
-With no topic, madoqua looks at the current directory and prints `setup` when
-it finds nothing and `triage` when it does. Detection never walks up, so run
-this at the repository root. What it looks for, in order:
+With no topic, madoqua looks at one directory — `--root` when you pass it, the
+current one otherwise — and prints `setup` when it finds nothing there and
+`triage` when it does. Detection uses that directory as given and never walks
+up, so point it at the repository root. What it looks for, in order:
 
 1. `hooks/pre-commit` invoking madoqua — the shim [`install`](install.md)
    writes.

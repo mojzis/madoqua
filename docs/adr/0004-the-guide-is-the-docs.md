@@ -66,6 +66,14 @@ Detection is heuristic. A repository configured entirely through something we
 do not look for reads as unconfigured and gets setup instructions, which is
 wrong but harmless: the instructions are idempotent.
 
+The extraction the parse check relies on is not a shell. It understands a `|`
+pipeline and `<placeholder>` holes and nothing else, so a guide author who
+writes `&&`, `;` or a redirect inside a command span gets a test failure that
+blames the CLI for rejecting a command the guide never really showed. That is
+the right way round — loud rather than silent — but it is a constraint on
+writing the pages, and it is written down in the `guide.rs` module doc because
+that is where someone hitting it will look.
+
 The guides duplicate, in a compressed form, what `docs/src/configuration.md`
 and `docs/src/troubleshooting.md` say at length. That is deliberate — the
 audiences differ — but it is two places to update when the behaviour changes,

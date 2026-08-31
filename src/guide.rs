@@ -4,6 +4,13 @@
 //! [`include_str!`], so the documentation site and the CLI serve the same
 //! bytes. There is no guide text in this file, and there must never be: a
 //! second copy is a copy that drifts.
+//!
+//! Guide authors have one constraint, enforced by the tests below: every
+//! madoqua invocation a page shows must survive the extraction below. It
+//! understands a `|` pipeline and `<placeholder>` holes, and nothing else —
+//! `&&`, `;` and redirects are not shell to it, they are arguments, and a
+//! command using them will fail the parse check with a message blaming the
+//! CLI. Put those outside the backticks.
 
 use std::path::Path;
 
@@ -46,8 +53,14 @@ impl Topic {
         }
     }
 
-    /// Every topic, for tests and for exhaustive rendering.
-    pub const ALL: [Self; 3] = [Self::Setup, Self::Triage, Self::Tune];
+    /// Every topic, exhaustively.
+    ///
+    /// Taken from the `ValueEnum` derive rather than written out: every
+    /// content guarantee in this module iterates this, so a fourth variant a
+    /// hand-written list forgot would silently stop being checked.
+    pub fn all() -> impl Iterator<Item = Self> {
+        <Self as clap::ValueEnum>::value_variants().iter().copied()
+    }
 }
 
 /// What made a repository count as configured.
@@ -125,7 +138,9 @@ fn shim_invokes_madoqua(path: &Path) -> bool {
     let Ok(contents) = std::fs::read_to_string(path) else {
         return false;
     };
-    contents.lines().any(|line| line.split('#').next().unwrap_or("").contains("madoqua"))
+    contents
+        .lines()
+        .any(|line| line.split_once('#').map_or(line, |(before, _)| before).contains("madoqua"))
 }
 
 /// Parse `pyproject.toml` and report whether it carries a `[tool.madoqua]`
@@ -176,43 +191,49 @@ pub fn render(topic: Topic, selection: Selection) -> String {
 
 /// Every madoqua invocation the guides show, as argv vectors ready for clap.
 ///
-/// Public because the check that matters — feeding each one through the real
-/// `Command` — can only run where the `Cli` type lives. A guide that shows a
-/// command the CLI would reject is worse than no guide.
+/// This and the four helpers below are the whole extraction pipeline, and all
+/// five are test-only: they exist to hold the pages to their promises, and a
+/// shipped binary has no use for them.
+///
+/// Crate-visible because the check that matters — feeding each one through the
+/// real `Command` — can only run where the `Cli` type lives, which is
+/// `cli.rs`. A guide that shows a command the CLI would reject is worse than
+/// no guide.
 ///
 /// Placeholders like `<name>` are dropped: they are holes for the reader to
-/// fill, not arguments.
+/// fill, not arguments. The tokens borrow from the included pages, so nothing
+/// here allocates.
+#[cfg(test)]
 #[must_use]
-#[doc(hidden)]
-pub fn embedded_invocations(topic: Topic) -> Vec<Vec<String>> {
-    command_lines(topic.text()).iter().flat_map(|line| madoqua_invocations(line)).collect()
+pub(crate) fn embedded_invocations(topic: Topic) -> Vec<Vec<&'static str>> {
+    command_lines(topic.text()).into_iter().flat_map(madoqua_invocations).collect()
 }
 
 /// Command strings written in a guide: inline backtick spans that invoke
 /// madoqua, plus every non-blank line of a fenced `bash` block.
-fn command_lines(text: &str) -> Vec<String> {
-    let mut out: Vec<String> =
-        inline_code_spans(text).into_iter().filter(|span| invokes(span)).collect();
+#[cfg(test)]
+fn command_lines(text: &str) -> Vec<&str> {
+    let mut out: Vec<&str> = inline_code_spans(text).into_iter().filter(invokes).collect();
     out.extend(
         lines_with_fence(text)
             .filter(|&(line, fence)| fence == Some("bash") && !line.trim().is_empty())
-            .map(|(line, _)| line.to_owned()),
+            .map(|(line, _)| line),
     );
     out
 }
 
 /// Split a command line on pipes and keep the segments that invoke madoqua.
-fn madoqua_invocations(line: &str) -> Vec<Vec<String>> {
+#[cfg(test)]
+fn madoqua_invocations(line: &str) -> Vec<Vec<&str>> {
     line.split('|')
         .map(str::trim)
-        .filter(|segment| invokes(segment))
+        .filter(invokes)
         .map(|segment| {
             segment
                 .split_whitespace()
                 // `<name>` and `--repo=<name>` are holes for the reader; a
                 // token carrying either bracket is not an argument.
                 .filter(|token| !token.contains('<') && !token.contains('>'))
-                .map(str::to_owned)
                 .collect()
         })
         .collect()
@@ -220,13 +241,15 @@ fn madoqua_invocations(line: &str) -> Vec<Vec<String>> {
 
 /// Whether a command string is a madoqua invocation rather than prose or
 /// another tool.
-fn invokes(command: &str) -> bool {
-    command == "madoqua" || command.starts_with("madoqua ")
+#[cfg(test)]
+fn invokes(command: &&str) -> bool {
+    *command == "madoqua" || command.starts_with("madoqua ")
 }
 
 /// Inline `code` spans, in source order. Fenced blocks are skipped: they hold
 /// TOML, which a config-key check would misread as keys.
-fn inline_code_spans(text: &str) -> Vec<String> {
+#[cfg(test)]
+fn inline_code_spans(text: &str) -> Vec<&str> {
     let mut spans = Vec::new();
     for (line, fence) in lines_with_fence(text) {
         if fence.is_some() {
@@ -236,7 +259,7 @@ fn inline_code_spans(text: &str) -> Vec<String> {
         while let Some(open) = rest.find('`') {
             let after = &rest[open + 1..];
             let Some(close) = after.find('`') else { break };
-            spans.push(after[..close].to_owned());
+            spans.push(&after[..close]);
             rest = &after[close + 1..];
         }
     }
@@ -248,6 +271,7 @@ fn inline_code_spans(text: &str) -> Vec<String> {
 ///
 /// One walker for both extractors: they would disagree about what opened a
 /// fence for exactly as long as there were two of them.
+#[cfg(test)]
 fn lines_with_fence(text: &str) -> impl Iterator<Item = (&str, Option<&str>)> {
     let mut fence: Option<&str> = None;
     text.lines().filter_map(move |line| {
@@ -261,6 +285,8 @@ fn lines_with_fence(text: &str) -> impl Iterator<Item = (&str, Option<&str>)> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     /// No topic may exceed this many lines. Failing this test is the point of
@@ -282,7 +308,7 @@ mod tests {
 
     #[test]
     fn every_topic_fits_the_line_cap() {
-        for topic in Topic::ALL {
+        for topic in Topic::all() {
             let lines = topic.text().trim_end().lines().count();
             assert!(
                 lines <= LINE_CAP,
@@ -296,7 +322,7 @@ mod tests {
 
     #[test]
     fn every_topic_is_plain_ascii() {
-        for topic in Topic::ALL {
+        for topic in Topic::all() {
             let offender = topic.text().chars().find(|c| !c.is_ascii());
             assert!(
                 offender.is_none(),
@@ -309,7 +335,7 @@ mod tests {
 
     #[test]
     fn every_topic_ends_with_a_single_next_line() {
-        for topic in Topic::ALL {
+        for topic in Topic::all() {
             let trimmed = topic.text().trim_end();
             let last = trimmed.lines().next_back().expect("guide should not be empty");
             assert!(
@@ -319,6 +345,12 @@ mod tests {
             );
             let count = trimmed.lines().filter(|l| l.starts_with("next: run ")).count();
             assert_eq!(count, 1, "guide `{}` should have exactly one next line", topic.name());
+            assert!(
+                topic.text().ends_with('\n'),
+                "guide `{}` must end with a newline; `guide_in` writes the page verbatim, so \
+                 losing it lands the shell prompt mid-line",
+                topic.name(),
+            );
         }
     }
 
@@ -371,23 +403,23 @@ mod tests {
     fn extraction_finds_every_command_the_guides_show() {
         let setup = embedded_invocations(Topic::Setup);
         assert!(
-            setup.contains(&vec!["madoqua".to_owned(), "install".to_owned()]),
+            setup.contains(&vec!["madoqua", "install"]),
             "setup shows `madoqua install` in a bash fence, extraction returned {setup:?}",
         );
         assert!(
-            setup.contains(&vec!["madoqua".to_owned(), "guide".to_owned(), "triage".to_owned()]),
+            setup.contains(&vec!["madoqua", "guide", "triage"]),
             "setup points at the triage guide, extraction returned {setup:?}",
         );
         let tune = embedded_invocations(Topic::Tune);
         assert!(
-            tune.contains(&vec!["madoqua".to_owned(), "stats".to_owned()]),
+            tune.contains(&vec!["madoqua", "stats"]),
             "the `--repo=<name>` placeholder should be stripped, leaving a real argv; got {tune:?}",
         );
-        for topic in Topic::ALL {
+        for topic in Topic::all() {
             let found = embedded_invocations(topic);
             assert!(!found.is_empty(), "guide `{}` shows no commands at all", topic.name());
             for argv in &found {
-                assert_eq!(argv.first().map(String::as_str), Some("madoqua"), "argv is {argv:?}");
+                assert_eq!(argv.first().copied(), Some("madoqua"), "argv is {argv:?}");
             }
         }
     }
@@ -396,7 +428,7 @@ mod tests {
     fn extraction_skips_commands_that_are_not_madoqua() {
         let setup = embedded_invocations(Topic::Setup);
         assert!(
-            !setup.iter().any(|argv| argv.iter().any(|word| word == "uv")),
+            !setup.iter().any(|argv| argv.contains(&"uv")),
             "`uv venv && uv sync` sits in a bash fence and is not ours to parse: {setup:?}",
         );
     }
@@ -408,12 +440,12 @@ mod tests {
         let accepted = crate::config::keys::accepted_keys();
         let mut checked = 0_usize;
 
-        for topic in Topic::ALL {
+        for topic in Topic::all() {
             for span in inline_code_spans(topic.text()) {
-                let Some(key) = config_key_candidate(&span) else { continue };
+                let Some(key) = config_key_candidate(span) else { continue };
                 checked += 1;
                 assert!(
-                    accepted.contains(key.as_str()),
+                    accepted.contains(key),
                     "guide `{}` names config key `{key}`, which the deserializer does not \
                      accept; accepted: {accepted:?}",
                     topic.name(),
@@ -423,18 +455,35 @@ mod tests {
         assert!(checked >= 6, "expected the guides to name several config keys, found {checked}");
     }
 
+    /// The other direction, which is the one that catches drift: a key added
+    /// to the schema that no guide mentions is a key nobody will find.
+    ///
+    /// Matched against every inline span rather than against the candidates,
+    /// because half the keys — `fix`, `check`, `log`, `cmd`, `name` — are
+    /// single words that [`config_key_candidate`] deliberately reads as prose.
+    #[test]
+    fn every_config_key_is_named_by_a_guide() {
+        let mentioned: BTreeSet<&str> =
+            Topic::all().flat_map(|topic| inline_code_spans(topic.text())).collect();
+
+        for key in crate::config::keys::accepted_keys() {
+            assert!(
+                mentioned.contains(key),
+                "`{key}` is an accepted config key that no guide names; document it in \
+                 `docs/src/guide/tune.md`, which is the reference",
+            );
+        }
+    }
+
     /// Recognise a span as a config key reference: `snake_case` with an
     /// underscore, which is what distinguishes a key from an ordinary
     /// backticked word like `check` or `log`. Anything with a `.` or a `[` is
     /// a path or a TOML table header, not a key.
-    fn config_key_candidate(span: &str) -> Option<String> {
+    fn config_key_candidate(span: &str) -> Option<&str> {
         if span.contains('.') || span.contains('[') {
             return None;
         }
-        if is_snake_case(span) && span.contains('_') {
-            return Some(span.to_owned());
-        }
-        None
+        if is_snake_case(span) && span.contains('_') { Some(span) } else { None }
     }
 
     fn is_snake_case(s: &str) -> bool {
@@ -445,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_key_that_does_not_exist_would_be_caught() {
-        assert_eq!(config_key_candidate("extend_check").as_deref(), Some("extend_check"));
+        assert_eq!(config_key_candidate("extend_check"), Some("extend_check"));
         assert!(
             !crate::config::keys::accepted_keys().contains("extend_lint"),
             "the key check would pass anything if every snake_case word were accepted",
@@ -573,6 +622,7 @@ mod tests {
         for source in [
             None,
             Some(ConfigSource::Shim),
+            Some(ConfigSource::GitHookShim),
             Some(ConfigSource::PyProject),
             Some(ConfigSource::Overlay),
         ] {

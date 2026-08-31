@@ -1,6 +1,7 @@
 # 0002 — The seams the hook needs
 
 Status: accepted
+Amended by: [0004](0004-the-guide-is-the-docs.md) — `guide.rs` is an eighth seam
 
 ## Decision
 
