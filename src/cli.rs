@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::config::Config;
+use crate::guide::{self, Topic};
 use crate::{clock, git, hook, install, stats, timelog};
 
 /// What a command decided, before it becomes an exit code.
@@ -78,6 +79,18 @@ pub enum Command {
         #[arg(long)]
         repo: Option<String>,
     },
+
+    /// Print setup, triage or tune instructions for this repository
+    ///
+    /// With no topic, prints `setup` when madoqua is not wired into the current
+    /// directory and `triage` when it is; `tune` is never auto-selected.
+    /// Detection looks at the current directory only and never walks up, so run
+    /// this at the repository root.
+    Guide {
+        /// Which instructions to print. Omit to let madoqua choose.
+        #[arg(value_enum)]
+        topic: Option<Topic>,
+    },
 }
 
 impl Cli {
@@ -96,7 +109,25 @@ impl Cli {
             Command::Stats { days, json, repo } => {
                 Self::stats(out, &start, *days, *json, repo.as_deref())
             }
+            Command::Guide { topic } => Self::guide_in(out, &start, *topic),
         }
+    }
+
+    /// Print a guide, resolving the topic against `dir` when none was named.
+    ///
+    /// `dir` rather than the repository root: the question auto-selection
+    /// answers is "is madoqua set up where I am standing", and the guide tells
+    /// its reader to stand at the repository root. Like `stats`, this is an
+    /// inventory and never returns `1`.
+    fn guide_in(out: &mut impl Write, dir: &Path, topic: Option<Topic>) -> Result<Outcome> {
+        let text = if let Some(topic) = topic {
+            guide::render(topic, guide::Selection::Explicit)
+        } else {
+            let source = guide::detect(dir);
+            guide::render(guide::auto_topic(source), guide::Selection::Auto(source))
+        };
+        write!(out, "{text}").context("cannot write to stdout")?;
+        Ok(Outcome::Clean)
     }
 
     fn install(out: &mut impl Write, start: &Path) -> Result<Outcome> {
@@ -139,6 +170,8 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
 
+    use crate::guide;
+
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
@@ -173,5 +206,107 @@ mod tests {
                 "`{phrase}` is the kind of thing people look up in --help"
             );
         }
+    }
+
+    /// Every madoqua command the guides show must be one the CLI actually
+    /// accepts.
+    ///
+    /// This lives here rather than in `src/guide.rs` because `Cli` is defined
+    /// here: the check is only worth anything against the real `Command`,
+    /// aliases, conflicts and all. The extraction it relies on is tested in
+    /// `guide::tests::extraction_finds_every_command_the_guides_show`, so an
+    /// empty list cannot pass as "everything valid".
+    #[test]
+    fn every_command_shown_in_a_guide_parses() {
+        let mut checked = 0_usize;
+        for topic in Topic::ALL {
+            for argv in guide::embedded_invocations(topic) {
+                checked += 1;
+                let parsed = Cli::command().try_get_matches_from(&argv);
+                assert!(
+                    parsed.is_ok(),
+                    "guide `{}` shows `{}`, which the CLI rejects: {}",
+                    topic.name(),
+                    argv.join(" "),
+                    parsed.err().map_or_else(String::new, |e| e.to_string()),
+                );
+            }
+        }
+        assert!(checked >= 6, "expected several commands across the guides, found {checked}");
+    }
+
+    /// Guard the guard: an invocation the CLI would reject must fail the check
+    /// above.
+    #[test]
+    fn an_unknown_flag_would_be_caught() {
+        assert!(
+            Cli::command().try_get_matches_from(["madoqua", "stats", "--not-a-flag"]).is_err(),
+            "the command check would pass anything if clap accepted unknown flags",
+        );
+    }
+
+    /// The auto-selection rule has to be discoverable from `--help`, since an
+    /// agent that ran `madoqua guide` with no topic needs to know why it got
+    /// what it got before it trusts it.
+    #[test]
+    fn guide_help_states_the_auto_selection_rule() {
+        let help = Cli::command()
+            .get_subcommands()
+            .find(|c| c.get_name() == "guide")
+            .and_then(clap::Command::get_long_about)
+            .map(std::string::ToString::to_string)
+            .unwrap_or_default();
+        for phrase in ["setup", "triage", "never auto-selected", "repository root"] {
+            assert!(help.contains(phrase), "guide --help should say `{phrase}`: {help}");
+        }
+    }
+
+    #[test]
+    fn guide_topics_parse_as_values() {
+        for topic in ["setup", "triage", "tune"] {
+            assert!(
+                Cli::command().try_get_matches_from(["madoqua", "guide", topic]).is_ok(),
+                "`madoqua guide {topic}` should parse",
+            );
+        }
+        assert!(
+            Cli::command().try_get_matches_from(["madoqua", "guide", "how"]).is_err(),
+            "an unknown topic should be rejected rather than silently defaulted",
+        );
+    }
+
+    #[test]
+    fn an_explicit_topic_is_printed_verbatim_without_looking_at_the_directory() {
+        let mut out = Vec::new();
+        // A path that does not exist: an explicit topic has no filesystem
+        // question to answer, so this must not matter.
+        let outcome =
+            Cli::guide_in(&mut out, Path::new("/nonexistent/madoqua"), Some(Topic::Tune)).unwrap();
+        assert_eq!(outcome, Outcome::Clean, "the guide is an inventory, never a verdict");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            guide::render(Topic::Tune, guide::Selection::Explicit),
+        );
+    }
+
+    #[test]
+    fn no_topic_is_resolved_from_the_directory_it_is_pointed_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut out = Vec::new();
+        Cli::guide_in(&mut out, dir.path(), None).unwrap();
+        let printed = String::from_utf8(out).unwrap();
+        assert!(
+            printed.starts_with("# madoqua guide: not configured here -> setup"),
+            "an empty directory gets setup, and is told why: {printed}",
+        );
+
+        std::fs::write(dir.path().join("pyproject.toml"), "[tool.madoqua]\n").unwrap();
+        let mut out = Vec::new();
+        Cli::guide_in(&mut out, dir.path(), None).unwrap();
+        let printed = String::from_utf8(out).unwrap();
+        assert!(
+            printed.starts_with("# madoqua guide: configured via pyproject.toml"),
+            "a configured repo gets triage, and is told why: {printed}",
+        );
     }
 }

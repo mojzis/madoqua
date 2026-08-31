@@ -12,3 +12,4 @@ supersedes the old one, and a `Superseded by` line added to it.
 | [0001](0001-exit-codes-are-a-contract.md) | `0` / `1` / `2` are three distinct answers | accepted |
 | [0002](0002-the-seams-the-hook-needs.md) | The seams the hook needs | accepted |
 | [0003](0003-timestamps-are-utc-and-dependency-free.md) | Timestamps are UTC, and we compute them ourselves | accepted |
+| [0004](0004-the-guide-is-the-docs.md) | The guide ships the docs, and it is a seam | accepted |

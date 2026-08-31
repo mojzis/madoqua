@@ -318,6 +318,118 @@ fn skip_var() -> String {
     std::env::var(SKIP_VAR).unwrap_or_default()
 }
 
+/// The field names the configuration deserializer actually accepts.
+///
+/// Asked of serde rather than written down, so a renamed field cannot leave a
+/// stale list behind: [`crate::guide`] checks every config key its pages name
+/// against this, and a hand-maintained list would drift the moment a key moved.
+pub mod keys {
+    use std::collections::BTreeSet;
+    use std::fmt;
+
+    use serde::de::{self, Deserializer, Visitor};
+    use serde::forward_to_deserialize_any;
+
+    use super::{Layer, StepTable};
+
+    /// Carries the captured field list out through serde's error channel,
+    /// which is the only way out of a `Deserializer` that refuses to produce a
+    /// value.
+    #[derive(Debug)]
+    pub struct Captured(Vec<&'static str>);
+
+    impl fmt::Display for Captured {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "captured fields: {:?}", self.0)
+        }
+    }
+
+    impl std::error::Error for Captured {}
+
+    impl de::Error for Captured {
+        fn custom<T: fmt::Display>(_msg: T) -> Self {
+            Self(Vec::new())
+        }
+    }
+
+    /// A `Deserializer` that answers "what fields does this struct have?" and
+    /// nothing else.
+    struct FieldCapture;
+
+    impl<'de> Deserializer<'de> for FieldCapture {
+        type Error = Captured;
+
+        fn deserialize_struct<V: Visitor<'de>>(
+            self,
+            _name: &'static str,
+            fields: &'static [&'static str],
+            _visitor: V,
+        ) -> Result<V::Value, Captured> {
+            Err(Captured(fields.to_vec()))
+        }
+
+        fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, Captured> {
+            Err(Captured(Vec::new()))
+        }
+
+        forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+            bytes byte_buf option unit unit_struct newtype_struct seq tuple
+            tuple_struct map enum identifier ignored_any
+        }
+    }
+
+    /// The field names `T`'s derived `Deserialize` will accept.
+    fn field_names<T: serde::de::DeserializeOwned>() -> Vec<&'static str> {
+        match T::deserialize(FieldCapture) {
+            Err(Captured(fields)) => fields,
+            Ok(_) => Vec::new(),
+        }
+    }
+
+    /// Every key a configuration file may set: the layer keys and the keys of
+    /// a step written in table form.
+    #[must_use]
+    pub fn accepted_keys() -> BTreeSet<&'static str> {
+        field_names::<Layer>().into_iter().chain(field_names::<StepTable>()).collect()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::accepted_keys;
+
+        #[test]
+        fn the_layer_and_step_keys_are_all_there() {
+            let keys = accepted_keys();
+            for expected in [
+                "fix",
+                "check",
+                "extend_fix",
+                "extend_check",
+                "log",
+                "cmd",
+                "name",
+                "pass_files",
+                "timeout_s",
+                "max_output_lines",
+            ] {
+                assert!(
+                    keys.contains(expected),
+                    "`{expected}` should be an accepted key: {keys:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_key_that_was_never_declared_is_not_accepted() {
+            assert!(
+                !accepted_keys().contains("extend_lint"),
+                "the list comes from serde, so an invented key must be absent",
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

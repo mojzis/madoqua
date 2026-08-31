@@ -108,6 +108,17 @@ invariant the code no longer upholds is a bug in one of the two.
 - **Config keys that a flag can override are `Option`, not defaulted.** "Absent"
   has to stay distinguishable from "set to the default value", or the
   flag-beats-file-beats-built-in precedence cannot be expressed.
+- **Guide prose lives in `docs/src/guide/`, never in `guide.rs`.** The CLI
+  `include_str!`s the same bytes the site publishes; a second copy is a copy
+  that drifts. The tests are the contract: every madoqua command a guide shows
+  is fed through the real `clap::Command`, every config key it names is checked
+  against what the deserializer accepts (`config::keys`), each page is capped
+  at 60 lines and ends with exactly one `next: run` line. Cut a guide rather
+  than raise the cap — one past a screenful stops being read.
+- **`guide` is an inventory, so it returns `0` or `2` and never `1`**, like
+  `stats`. It also never needs a git repository: detection looks at one
+  directory and treats an unreadable or malformed file as "not configured"
+  rather than as a reason to refuse to print.
 - **Every test asserts on a value.** Running without panicking is not a test,
   and an integration test that asserts on stdout also asserts on the exit code.
 
@@ -125,5 +136,8 @@ The mdBook site under `docs/` deploys to GitHub Pages on push to `main`
   preprocessor protocol that changed between mdbook 0.4 and 0.5, and a
   mismatched pair fails with `Unable to parse the input`, naming neither tool —
   `make docs` runs the check first so it names both.
+- `docs/src/guide/*.md` is served twice: by the site, and by `madoqua guide`,
+  which `include_str!`s it. Editing one of those pages changes the binary's
+  output, so `cargo test` is part of editing them (ADR 0004).
 - Adding a page means adding it to `docs/src/SUMMARY.md`; the `llms.txt`
   generator reads that file.

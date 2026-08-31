@@ -17,6 +17,7 @@ pub mod cli;
 pub mod clock;
 pub mod config;
 pub mod git;
+pub mod guide;
 pub mod hook;
 pub mod install;
 pub mod report;
