@@ -1,4 +1,4 @@
-.PHONY: review review-quick fmt-check lint test audit deny coverage mutants docs docs-serve docs-toolchain
+.PHONY: review review-quick fmt-check lint test audit deny coverage mutants docs docs-serve docs-toolchain wheel
 
 # Full review — run before pushing or merging
 review: fmt-check lint test audit deny
@@ -57,6 +57,16 @@ mutants:
 		cargo mutants --in-diff HEAD~1..HEAD; \
 	else \
 		echo "⚠️  cargo-mutants not installed. Run: cargo install cargo-mutants"; \
+	fi
+
+# Build the Python wheel that ships the binary. `bindings = "bin"` in
+# pyproject.toml is what makes the wheel a binary wheel rather than a module.
+wheel:
+	@echo "📦 Building the wheel..."
+	@if command -v maturin > /dev/null 2>&1; then \
+		maturin build --release; \
+	else \
+		echo "⚠️  maturin not installed. Run: uv tool install maturin"; \
 	fi
 
 # Check that mdbook and mdbook-mermaid are the pair CI pins. They share a

@@ -5,8 +5,12 @@ code in this repository.
 
 ## Project Overview
 
-`madoqua` is a CLI. **TODO: replace this paragraph once the plan lands — say
-what it does, what it drives, and what it reports.**
+`madoqua` is a git pre-commit hook for Python repos, ported from a bash script.
+It guards that the repo's `.venv` is what tools will run from, runs the fix
+commands over the staged `*.py`/`*.pyi` files sequentially, re-stages them, runs
+the check commands in parallel, and prints one line on success or the failing
+tools' output on failure. Every run appends a timing record to a JSONL log that
+`madoqua stats` summarises.
 
 It is a hybrid Rust/Python project: a Rust binary packaged as a Python wheel via
 maturin and published to PyPI.
@@ -19,8 +23,10 @@ Architecture details: `docs/dev/ARCHITECTURE.md`. Decisions and their costs:
 - A Rust toolchain matching `rust-toolchain.toml`.
 - `mdbook` and `mdbook-mermaid` for `make docs` — the pinned pair is in
   `docs/toolchain.sh`.
-- **TODO:** list the external tools the commands shell out to, and the env var
-  that overrides each one for tests.
+- The commands madoqua runs are configuration, not code: the built-in defaults
+  are `ruff` and `ty`, resolved out of `<repo_root>/.venv/bin`. Tests never
+  need them installed — the fixture repo in `tests/common/mod.rs` writes shell
+  stubs into a stub `.venv/bin`, which the venv guard then puts on `PATH`.
 
 ## Common Commands
 
@@ -64,7 +70,22 @@ invariant the code no longer upholds is a bug in one of the two.
 - **Exit codes are part of the contract.** `0` clean, `1` findings, `2` the run
   could not complete. Do not collapse `1` and `2` (ADR 0001). A command that is
   an inventory rather than a verdict returns `0` or `2` and never `1`, and its
-  docs must say so.
+  docs must say so — that is why `stats` never returns `1`.
+- **A blocked commit is `1`, not `2`.** A failed check and a refused virtualenv
+  guard both mean "your commit is not ready", which is a finding. `2` is
+  reserved for madoqua being unable to do its job at all: not a repository,
+  unreadable config, a command it cannot honour.
+- **The verdict is one line, on success only.** A hook that prints on every
+  clean run trains people to stop reading it. Failures print only the tools
+  that failed. Anything else you are tempted to say goes on stderr, or nowhere.
+- **The fix phase is sequential and the check phase is parallel.** Fixers
+  rewrite the same files in a meaningful order; checks are read-only. A fixer's
+  non-zero exit is never fatal — the check that follows reports it.
+- **Logging is best-effort.** A failure to write the timing log warns on stderr
+  and the commit proceeds. Nothing about timings may ever block a commit.
+- **A no-op run is not logged.** Runs with no staged Python files write
+  nothing, or they dominate the percentiles of any repo that also commits
+  prose.
 - **`main.rs` stays thin.** Argument parsing, tracing setup, exit-code mapping.
   Command bodies belong in `cli.rs`.
 - **Impurity lives in named seams.** Every process spawn, filesystem read and

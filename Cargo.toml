@@ -1,12 +1,12 @@
 [package]
 name = "madoqua"
 version = "0.1.0"
-edition = "2021"
-description = "TODO: one-line description of madoqua"
+edition = "2024"
+description = "A small, fast pre-commit hook runner for Python repos — silent until there's something to say"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/mojzis/madoqua"
-keywords = ["cli", "command-line-utilities"]
+keywords = ["cli", "git", "hook", "pre-commit", "lint"]
 categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
