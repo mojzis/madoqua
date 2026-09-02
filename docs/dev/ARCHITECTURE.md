@@ -19,6 +19,7 @@ How the crate is put together. For *why*, and what each choice cost, see
 | `timelog.rs` | Resolving the log path (`~`, in-repo or not) and appending to it. | yes |
 | `clock.rs` | The wall clock, and RFC 3339 without a date crate. | yes |
 | `install.rs` | Write the `hooks/pre-commit` shim and point git at it. | writes three things, once |
+| `guide.rs` | The agent-facing instructions: which topic, and detecting whether madoqua is wired into a directory. The prose is `include_str!`d from `docs/src/guide/`, never written here. | consults four paths, tolerantly |
 
 ## Dependencies
 

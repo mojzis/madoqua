@@ -19,6 +19,7 @@ commit.
 madoqua install   # write hooks/pre-commit and point git at it
 madoqua run       # what the hook does; also what a bare `madoqua` does
 madoqua stats     # what the hook has been costing you
+madoqua guide     # what to do here, right now
 ```
 
 ## Exit codes

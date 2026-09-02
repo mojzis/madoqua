@@ -24,7 +24,7 @@ echo "Copied .md source files to $BOOK_DIR/"
 cat > "$BOOK_DIR/llms.txt" << EOF
 # madoqua
 
-> Symbol-level Python code intelligence, powered by ty-find.
+> A pre-commit hook for Python repos: fix what you staged, re-stage it, check it in parallel, and say one line about it.
 
 ## Documentation
 

@@ -11,7 +11,7 @@ fn help_lists_the_commands() {
     let assert = common::madoqua(dir.path()).arg("--help").assert().success();
     let stdout = common::stdout(&assert);
 
-    for command in ["run", "install", "stats"] {
+    for command in ["run", "install", "stats", "guide"] {
         assert!(stdout.contains(command), "`{command}` is missing from --help:\n{stdout}");
     }
 }
@@ -252,4 +252,58 @@ fn stats_can_filter_a_shared_log_by_repository() {
     assert_eq!(report["runs"], 1, "the other repo's runs are not mine to worry about");
     assert_eq!(report["total"]["max"], 100);
     assert_eq!(report["repo"], "mine");
+}
+
+#[test]
+fn guide_prints_the_named_topic_on_stdout_and_exits_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let assert = common::madoqua(dir.path())
+        .args(["guide", "tune"])
+        .assert()
+        // A guide is an inventory, not a verdict: it never returns 1, and it
+        // never needs a repository either.
+        .success();
+    let stdout = common::stdout(&assert);
+
+    assert!(stdout.starts_with("# madoqua guide: tune\n"), "got: {stdout}");
+    assert!(stdout.contains("MADOQUA_SKIP"), "the tune guide is the reference: {stdout}");
+    assert!(stdout.trim_end().ends_with("next: run `madoqua stats`"), "got: {stdout}");
+    assert_eq!(common::stderr(&assert), "", "the guide is output, not logging");
+}
+
+#[test]
+fn guide_with_no_topic_picks_setup_outside_a_configured_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let assert = common::madoqua(dir.path()).arg("guide").assert().success();
+    let stdout = common::stdout(&assert);
+
+    assert!(
+        stdout.starts_with("# madoqua guide: not configured here -> setup"),
+        "an agent needs to see why it got this topic: {stdout}"
+    );
+}
+
+#[test]
+fn guide_with_no_topic_picks_triage_once_the_hook_is_installed() {
+    let repo = Repo::new();
+    repo.madoqua().arg("install").assert().success();
+
+    let assert = repo.madoqua().arg("guide").assert().success();
+    let stdout = common::stdout(&assert);
+
+    assert!(
+        stdout.starts_with("# madoqua guide: configured via hooks/pre-commit -> triage"),
+        "the installed shim is the strongest evidence madoqua runs here: {stdout}"
+    );
+}
+
+#[test]
+fn an_unknown_guide_topic_could_not_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    common::madoqua(dir.path())
+        .args(["guide", "how"])
+        .assert()
+        // A usage error is madoqua unable to do its job, not a finding.
+        .code(2)
+        .stderr(predicate::str::contains("how"));
 }
