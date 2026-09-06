@@ -93,7 +93,17 @@ fn install_writes_an_executable_shim_and_points_git_at_it() {
     assert!(common::stdout(&assert).contains("hooks/pre-commit"), "install says what it did");
 
     let shim = repo.path().join("hooks/pre-commit");
-    assert_eq!(std::fs::read_to_string(&shim).unwrap(), "#!/bin/sh\nexec madoqua run\n");
+    let contents = std::fs::read_to_string(&shim).unwrap();
+    assert!(contents.starts_with("#!/bin/sh\n"), "sh, not bash: {contents}");
+    assert!(
+        contents.contains(".venv/bin/madoqua"),
+        "the shim must try the repo's own venv first, since git runs it with the login \
+         PATH and not the shell's: {contents}"
+    );
+    assert!(
+        contents.trim_end().ends_with("exec madoqua run"),
+        "and fall back to whatever `madoqua` is on PATH: {contents}"
+    );
     assert_eq!(
         repo.git(&["config", "core.hooksPath"]).trim(),
         "hooks",
@@ -112,12 +122,10 @@ fn install_writes_an_executable_shim_and_points_git_at_it() {
 fn install_is_idempotent() {
     let repo = Repo::new();
     repo.madoqua().arg("install").assert().success();
+    let first = std::fs::read_to_string(repo.path().join("hooks/pre-commit")).unwrap();
     repo.madoqua().arg("install").assert().success();
 
-    assert_eq!(
-        std::fs::read_to_string(repo.path().join("hooks/pre-commit")).unwrap(),
-        "#!/bin/sh\nexec madoqua run\n"
-    );
+    assert_eq!(std::fs::read_to_string(repo.path().join("hooks/pre-commit")).unwrap(), first);
     assert_eq!(repo.git(&["config", "core.hooksPath"]).trim(), "hooks");
 }
 
@@ -151,6 +159,55 @@ fn an_installed_hook_runs_on_a_real_commit_and_logs_it() {
         "the fixer's edits made it into the commit, not just into the working tree"
     );
     assert_eq!(repo.log_records().len(), 1, "the commit left a timing record behind");
+}
+
+/// The hook is run by git with the login `PATH`, not the shell's, so `madoqua`
+/// as a dev dependency is invisible to it unless the shim looks in `.venv/bin`
+/// itself. The decoy on `PATH` fails loudly: a commit that goes through proves
+/// the shim never reached it.
+#[test]
+fn the_shim_runs_the_venv_binary_before_the_one_on_path() {
+    let repo = Repo::new();
+    repo.tool("fakecheck", "exit 0");
+    repo.write("pyproject.toml", "[tool.madoqua]\nfix = []\ncheck = [\"fakecheck\"]\n");
+    repo.madoqua().arg("install").assert().success();
+    std::fs::copy(assert_cmd::cargo::cargo_bin("madoqua"), repo.path().join(".venv/bin/madoqua"))
+        .unwrap();
+    let decoy = tempfile::tempdir().unwrap();
+    common::write_executable(
+        &decoy.path().join("madoqua"),
+        "#!/bin/sh\necho 'decoy madoqua on PATH was run' >&2\nexit 99\n",
+    );
+    repo.stage("a.py", "x = 1\n");
+
+    let path = format!("{}:{}", decoy.path().display(), std::env::var("PATH").unwrap_or_default());
+    let output = repo.commit_with_path("add a.py", &path);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "the commit was blocked: {stderr}");
+    assert!(!stderr.contains("decoy"), "the shim fell through to PATH: {stderr}");
+    assert_eq!(repo.log_records().len(), 1, "the venv binary ran the hook and logged it");
+}
+
+/// Without a binary in `.venv/bin` the shim falls back to `PATH`, which is
+/// where a `uv tool install` puts it.
+#[test]
+fn the_shim_falls_back_to_path_when_the_venv_has_no_madoqua() {
+    let repo = Repo::new();
+    repo.tool("fakecheck", "exit 0");
+    repo.write("pyproject.toml", "[tool.madoqua]\nfix = []\ncheck = [\"fakecheck\"]\n");
+    repo.madoqua().arg("install").assert().success();
+    repo.stage("a.py", "x = 1\n");
+    assert!(!repo.path().join(".venv/bin/madoqua").exists(), "fixture has no venv binary");
+
+    let output = repo.commit("add a.py");
+
+    assert!(
+        output.status.success(),
+        "the commit was blocked: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(repo.log_records().len(), 1);
 }
 
 #[test]

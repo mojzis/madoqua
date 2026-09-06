@@ -63,13 +63,10 @@ impl Repo {
     /// Write an executable stub into the venv's `bin`, where the hook will
     /// find it once the guard has put that directory on `PATH`.
     pub fn tool(&self, name: &str, body: &str) -> &Self {
-        let path = self.path().join(".venv/bin").join(name);
-        Self::write_path(&path, &format!("#!/bin/sh\n{body}\n"));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        write_executable(
+            &self.path().join(".venv/bin").join(name),
+            &format!("#!/bin/sh\n{body}\n"),
+        );
         self
     }
 
@@ -133,9 +130,15 @@ impl Repo {
     /// `exec madoqua run` resolves. Returns the raw output: whether the commit
     /// was allowed through is the thing under test.
     pub fn commit(&self, message: &str) -> std::process::Output {
+        self.commit_with_path(message, &path_with_binary())
+    }
+
+    /// Commit through git with an explicit `PATH`, for tests about what the
+    /// shim resolves `madoqua` to.
+    pub fn commit_with_path(&self, message: &str, path: &str) -> std::process::Output {
         self.git_command()
             .args(["commit", "-m", message])
-            .env("PATH", path_with_binary())
+            .env("PATH", path)
             .output()
             .expect("git is runnable")
     }
@@ -153,6 +156,16 @@ impl Repo {
 
     pub fn log_exists(&self) -> bool {
         self.path().join(".git/hook-timings.jsonl").exists()
+    }
+}
+
+/// Write `content` to `path`, creating parents, and mark it executable.
+pub fn write_executable(path: &Path, content: &str) {
+    Repo::write_path(path, content);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
 
