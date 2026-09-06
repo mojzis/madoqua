@@ -85,7 +85,7 @@ impl std::error::Error for VenvError {}
 
 /// Decide which environment to run in, given the current `PATH`.
 ///
-/// If `python` already resolves to `<root>/.venv/bin/python`, nothing happens.
+/// If the `python` on `PATH` lives in `<root>/.venv/bin`, nothing happens.
 /// Otherwise, if the venv exists, `.venv/bin` goes to the front of `PATH` and
 /// the check is repeated — an activation that does not actually win is a
 /// failure, not a shrug.
@@ -134,9 +134,26 @@ pub fn guard(root: &Path) -> Result<Venv, VenvError> {
     plan(root, &path, &RealFs)
 }
 
+/// Is the `python` on `path_value` the one at `expected`?
+///
+/// Compared by the directory it sits in, not by the file it links to: `uv venv`
+/// symlinks `.venv/bin/python` to the interpreter it built from, so following
+/// the link would make `/usr/bin/python` and the venv's python the same file —
+/// and only one of them sits next to `ruff`. The directory is canonicalised so
+/// a repo reached through a symlinked root still counts as active.
 fn resolves_to(path_value: &OsStr, expected: &Path, fs: &impl Fs) -> bool {
-    which(path_value, "python", fs)
-        .is_some_and(|found| found == expected || fs.canonical(&found) == fs.canonical(expected))
+    let Some(found) = which(path_value, "python", fs) else {
+        return false;
+    };
+    if found == expected {
+        return true;
+    }
+    match (found.parent(), expected.parent()) {
+        (Some(found_dir), Some(expected_dir)) => {
+            fs.canonical(found_dir) == fs.canonical(expected_dir)
+        }
+        _ => false,
+    }
 }
 
 /// The first executable named `program` on `path_value`, as `command -v` would
@@ -258,6 +275,37 @@ mod tests {
             OsString::from("/repo/.venv/bin:"),
             "an empty PATH entry is preserved rather than silently rewritten"
         );
+    }
+
+    #[test]
+    fn a_venv_built_from_the_system_python_is_still_activated() {
+        // `uv venv` symlinks `.venv/bin/python` to the interpreter it found,
+        // often `/usr/bin/python3.X`. Following that link makes the system
+        // python and the venv python the same file, but only one of them
+        // sits next to `ruff`.
+        struct Shared;
+        impl Fs for Shared {
+            fn is_executable(&self, path: &Path) -> bool {
+                path == Path::new("/usr/bin/python") || path == Path::new("/repo/.venv/bin/python")
+            }
+            fn exists(&self, _path: &Path) -> bool {
+                true
+            }
+            fn canonical(&self, path: &Path) -> PathBuf {
+                if path.file_name().is_some_and(|n| n == "python") {
+                    PathBuf::from("/usr/bin/python3.14")
+                } else {
+                    path.to_path_buf()
+                }
+            }
+        }
+
+        let venv = plan(Path::new(ROOT), OsStr::new("/usr/bin"), &Shared).unwrap();
+        assert!(
+            venv.auto_activated,
+            "the system python is the venv's interpreter, but it is not the venv"
+        );
+        assert_eq!(venv.env.path, OsString::from("/repo/.venv/bin:/usr/bin"));
     }
 
     #[test]
