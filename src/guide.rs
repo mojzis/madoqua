@@ -392,6 +392,27 @@ mod tests {
         assert!(text.contains("run in parallel"), "tune should state what the check phase is");
     }
 
+    #[test]
+    fn setup_commands_the_prerequisites_and_proves_the_hook_ran() {
+        // Naming a prerequisite ("ruff and ty have to be installed") is not
+        // the same as commanding it; and a clean tree makes `madoqua run` a
+        // silent no-op, which a reader once reported as "verified".
+        let text = Topic::Setup.text();
+        assert!(text.contains("uv add --dev madoqua ruff ty"), "setup should install the tools");
+        assert!(text.contains("writes no log row"), "setup should explain the no-op run");
+        assert!(text.contains("`git add` it"), "setup should have the reader stage a change");
+    }
+
+    #[test]
+    fn tune_defines_the_file_list_and_shows_the_siblings() {
+        let text = Topic::Tune.text();
+        assert!(text.contains("| `pass_files` | true |"), "tune should state the default");
+        assert!(text.contains("no run at all"), "tune should state the empty-list case");
+        for sibling in ["biston scan --focus-args", "zorilla check", "gerenuk run -- -q"] {
+            assert!(text.contains(sibling), "tune should show `{sibling}` as a step");
+        }
+    }
+
     // --- Every command in the guides must be a real invocation ---
     //
     // The commands are fed through the real clap `Command` in `cli.rs`, where
