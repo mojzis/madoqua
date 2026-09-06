@@ -3,8 +3,14 @@
 ## `madoqua: command not found`
 
 The wheel installs a binary onto your tool path. With `uv tool install`, check
-that `~/.local/bin` is on `PATH`. If the hook itself fails this way, remember
-that `git` runs `hooks/pre-commit` with your login `PATH`, not your shell's.
+that `~/.local/bin` is on `PATH`.
+
+If the hook itself fails this way, remember that `git` runs `hooks/pre-commit`
+with your login `PATH`, not your shell's. The shim `madoqua install` writes
+now looks in `<repo>/.venv/bin` first, so a dev-dependency install
+works without the venv active; a shim written by an older version only says
+`exec madoqua run`. Run `madoqua install` again to replace it, or add
+`madoqua` to the venv with `uv add --dev madoqua`.
 
 ## `madoqua: no virtualenv at …/.venv`
 
