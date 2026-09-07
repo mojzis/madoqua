@@ -75,7 +75,21 @@ madoqua --verbose run
 madoqua reads `[tool.madoqua]` out of the project's `pyproject.toml`. A missing
 file, or a file with no `[tool.madoqua]` table, is fine — both mean "defaults".
 Malformed TOML is not, and the error names the file. The same goes for
-`.git/hooks.local.toml`.
+`hooks.local.toml`.
+
+## Does it work in a `git worktree`?
+
+Yes, and it uses the same overlay and the same timing log as the clone the
+worktree belongs to: a linked worktree's `.git` is a *file* pointing at the
+clone's metadata directory, and madoqua asks git where that is rather than
+joining `.git/` onto the checkout. A `log` you configure yourself stays
+relative to the working tree you are committing in.
+
+madoqua 0.2.2 and earlier joined the path literally, so every run in a linked
+worktree failed with `cannot read …/.git/hooks.local.toml: Not a directory
+(os error 20)` and exit `2`, whether or not an overlay existed. Upgrade rather
+than working around it: the tools madoqua runs are the ones guarding the
+commit.
 
 ## A commit went through with unformatted code
 

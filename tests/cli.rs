@@ -276,6 +276,29 @@ fn stats_json_carries_the_same_numbers_and_stays_clean() {
     assert!(report["total"]["p95"].is_u64(), "got: {report}");
 }
 
+/// One clone, one history: `stats` in a linked worktree summarises the runs
+/// every checkout of the repository has made, not the empty log of a
+/// directory that has only existed since this morning.
+#[test]
+fn stats_in_a_linked_worktree_reads_the_clones_history() {
+    let repo = Repo::new();
+    repo.tool("fakecheck", "exit 0");
+    repo.write("pyproject.toml", "[tool.madoqua]\nfix = []\ncheck = [\"fakecheck\"]\n");
+    repo.git(&["add", "--", "pyproject.toml"]);
+    repo.git(&["commit", "-qm", "wire madoqua"]);
+    repo.stage("a.py", "x = 1\n");
+    repo.madoqua().arg("run").assert().success();
+
+    let worktree = repo.worktree("task");
+    worktree.stage("b.py", "y = 2\n");
+    worktree.madoqua().arg("run").assert().success();
+
+    let assert = worktree.madoqua().args(["stats", "--json"]).assert().success();
+    let report: serde_json::Value = serde_json::from_str(&common::stdout(&assert)).unwrap();
+    assert_eq!(report["runs"], 2, "both checkouts appended to the one log: {report}");
+    assert_eq!(report["steps"][0]["n"], 2, "and both runs count towards the step: {report}");
+}
+
 #[test]
 fn stats_with_no_log_says_so_rather_than_failing() {
     let repo = Repo::new();

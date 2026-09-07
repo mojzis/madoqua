@@ -84,6 +84,13 @@ invariant the code no longer upholds is a bug in one of the two.
   that could not be *started* is fatal, because no check follows a tool that
   isn't installed, and a verdict saying `applied & staged` about it would be
   the exact opposite of what happened.
+- **`.git` is a place git reports, not a directory under the root.** The
+  personal overlay and the default timing log are resolved through
+  `git rev-parse --git-common-dir` (ADR 0005), so anything that wants a file
+  "in `.git`" takes that directory as an argument rather than joining `.git/`
+  onto the working tree. In a linked worktree the join is a path through a
+  *file*: it fails with `Not a directory`, which is not `NotFound` and so is
+  not forgiven, and the whole run dies with `2` before a check has started.
 - **Logging is best-effort.** A failure to write the timing log warns on stderr
   and the commit proceeds. Nothing about timings may ever block a commit.
 - **A no-op run is not logged.** Runs with no staged Python files write

@@ -345,3 +345,51 @@ fn an_unwritable_log_warns_but_lets_the_commit_through() {
         "but it says so, once, on stderr"
     );
 }
+
+/// A repository whose madoqua configuration is committed, so a fresh checkout
+/// of it — a linked worktree — carries it too.
+fn wired_and_committed() -> Repo {
+    let repo = wired();
+    repo.git(&["add", "--", "pyproject.toml"]);
+    repo.git(&["commit", "-qm", "wire madoqua"]);
+    repo
+}
+
+#[test]
+fn a_linked_worktree_reads_the_overlay_from_the_clone_it_belongs_to() {
+    let repo = wired_and_committed();
+    repo.write(".git/hooks.local.toml", "extend_check = [\"fakefail\"]\n");
+
+    let worktree = repo.worktree("task");
+    worktree.tool("fakefail", "echo 'a.py:1: nope' >&2; exit 1");
+    worktree.stage("a.py", "x = 1\n");
+
+    let assert = worktree.madoqua().arg("run").assert().code(1);
+    assert_eq!(
+        common::stderr(&assert),
+        "== fakefail failed ==\na.py:1: nope\n",
+        "the overlay lives in the clone's git directory, and a worktree's `.git` is a file \
+         pointing at it — reading it as a directory is what used to abort the run"
+    );
+}
+
+#[test]
+fn a_run_in_a_linked_worktree_logs_to_the_clones_git_directory() {
+    let repo = wired_and_committed();
+    let worktree = repo.worktree("task");
+    worktree.stage("a.py", "x = 1\n");
+
+    worktree.madoqua().arg("run").assert().success();
+
+    let records = repo.log_records();
+    assert_eq!(records.len(), 1, "the worktree's run lands in the one log the clone has");
+    assert_eq!(
+        records[0]["repo"],
+        serde_json::Value::Null,
+        "worktrees of one clone are one repository, so the record has nothing to disambiguate"
+    );
+    assert!(
+        !worktree.path().join(".git").is_dir(),
+        "and nothing turned the worktree's `.git` file into a directory of its own"
+    );
+}

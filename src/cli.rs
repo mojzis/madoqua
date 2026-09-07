@@ -33,7 +33,7 @@ pub enum Outcome {
 /// find them.
 const OVERLAY_HELP: &str = "\
 Configuration is [tool.madoqua] in the repo's pyproject.toml, with a personal
-overlay at .git/hooks.local.toml layered on top:
+overlay at hooks.local.toml in the repo's git directory layered on top:
 
   check / fix               replace that list entirely
   extend_check / extend_fix append to the repo's list
@@ -150,8 +150,9 @@ impl Cli {
         repo: Option<&str>,
     ) -> Result<Outcome> {
         let root = git::repo_root(start)?;
-        let config = Config::resolve(&root)?;
-        let target = timelog::resolve(&root, config.log.as_deref());
+        let git_dir = git::common_dir(&root)?;
+        let config = Config::resolve(&root, &git_dir)?;
+        let target = timelog::resolve(&root, &git_dir, config.log.as_deref());
 
         let records = timelog::read(&target.path)?;
         let report = stats::summarise(&records, days, repo, clock::now_unix());
