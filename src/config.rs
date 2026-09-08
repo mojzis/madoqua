@@ -1,6 +1,6 @@
 //! What to run, read from `[tool.madoqua]` in the repo's `pyproject.toml`,
-//! from the personal overlay at `<repo_root>/.git/hooks.local.toml`, and from
-//! `MADOQUA_SKIP`.
+//! from the personal overlay at `hooks.local.toml` in the repository's git
+//! directory, and from `MADOQUA_SKIP`.
 //!
 //! Both files deserialize into the same `Layer`, and both are applied by the
 //! same merge, so the semantics are written down once. This module owns
@@ -91,25 +91,30 @@ fn builtin(table: &[(&str, &str)]) -> Vec<Step> {
 }
 
 impl Config {
-    /// Resolve the configuration for `root` against the real environment:
-    /// built-in defaults, then `pyproject.toml`, then the personal overlay,
-    /// then `MADOQUA_SKIP`.
+    /// Resolve the configuration for the working tree at `root`, whose git
+    /// directory is `git_dir`, against the real environment: built-in
+    /// defaults, then `pyproject.toml`, then the personal overlay, then
+    /// `MADOQUA_SKIP`.
+    ///
+    /// The two directories are the same one for an ordinary checkout and
+    /// different ones in a linked worktree; [`crate::git::common_dir`] is what
+    /// tells them apart.
     ///
     /// The environment read is the one impure line; [`Config::resolved_from`]
     /// is the same decision over data a test can hand it.
-    pub fn resolve(root: &Path) -> Result<Self> {
-        Self::resolved_from(root, &skip_var())
+    pub fn resolve(root: &Path, git_dir: &Path) -> Result<Self> {
+        Self::resolved_from(root, git_dir, &skip_var())
     }
 
     /// [`Config::resolve`] with the skip list supplied rather than read.
-    pub fn resolved_from(root: &Path, skip: &str) -> Result<Self> {
+    pub fn resolved_from(root: &Path, git_dir: &Path, skip: &str) -> Result<Self> {
         let mut config = Self::default();
 
         if let Some(layer) = read_pyproject(root)? {
             config.apply(layer).context("[tool.madoqua] in pyproject.toml")?;
         }
-        if let Some(layer) = read_overlay(&overlay_path(root))? {
-            config.apply(layer).context(".git/hooks.local.toml")?;
+        if let Some(layer) = read_overlay(&overlay_path(git_dir))? {
+            config.apply(layer).context("hooks.local.toml")?;
         }
         config.check = filter_checks(&config.check, skip);
         Ok(config)
@@ -140,9 +145,18 @@ impl Config {
     }
 }
 
-/// Where the personal overlay lives.
-fn overlay_path(root: &Path) -> PathBuf {
-    root.join(".git").join("hooks.local.toml")
+/// The overlay's name inside the git directory.
+const OVERLAY_NAME: &str = "hooks.local.toml";
+
+/// Where the personal overlay lives: in the git directory, not under the
+/// working tree.
+///
+/// Every worktree of a clone shares that directory, which is the semantics the
+/// overlay wants — it is one developer's settings for one repository, and a
+/// copy per worktree would have to be written again for every task branch,
+/// then vanish with `git worktree remove`.
+fn overlay_path(git_dir: &Path) -> PathBuf {
+    git_dir.join(OVERLAY_NAME)
 }
 
 /// One file's worth of settings, before merging.
@@ -451,6 +465,12 @@ mod tests {
         toml::from_str(toml_text).unwrap()
     }
 
+    /// [`Config::resolve`] for an ordinary checkout, where the git directory
+    /// is the `.git` under the working tree.
+    fn resolve_in_clone(root: &Path) -> Result<Config> {
+        Config::resolve(root, &root.join(".git"))
+    }
+
     #[test]
     fn the_defaults_are_the_bash_registry() {
         let config = Config::default();
@@ -566,9 +586,10 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir_all(dir.path().join(".git")).unwrap();
-        std::fs::write(overlay_path(dir.path()), "extend_check = [\"bandit\"]\n").unwrap();
+        std::fs::write(overlay_path(&dir.path().join(".git")), "extend_check = [\"bandit\"]\n")
+            .unwrap();
 
-        let config = Config::resolve(dir.path()).unwrap();
+        let config = resolve_in_clone(dir.path()).unwrap();
         assert_eq!(names(&config.check), ["mypy", "bandit"]);
         assert_eq!(config.log.as_deref(), Some("repo.jsonl"), "the overlay said nothing about log");
     }
@@ -577,7 +598,7 @@ mod tests {
     fn no_config_at_all_yields_the_defaults() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            Config::resolve(dir.path()).unwrap(),
+            resolve_in_clone(dir.path()).unwrap(),
             Config::default(),
             "the tool has to work in a repo that has never heard of it"
         );
@@ -587,14 +608,14 @@ mod tests {
     fn a_pyproject_without_our_table_yields_the_defaults() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("pyproject.toml"), "[project]\nname = \"x\"\n").unwrap();
-        assert_eq!(Config::resolve(dir.path()).unwrap(), Config::default());
+        assert_eq!(resolve_in_clone(dir.path()).unwrap(), Config::default());
     }
 
     #[test]
     fn malformed_toml_names_the_file() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("pyproject.toml"), "this is not toml {{").unwrap();
-        let err = Config::resolve(dir.path()).unwrap_err();
+        let err = resolve_in_clone(dir.path()).unwrap_err();
         assert!(
             format!("{err:#}").contains("pyproject.toml"),
             "the error must name the file it could not parse, got: {err:#}"
@@ -609,7 +630,7 @@ mod tests {
             "[tool.madoqua]\ncheck = [\"ruff | tee\"]\n",
         )
         .unwrap();
-        let err = format!("{:#}", Config::resolve(dir.path()).unwrap_err());
+        let err = format!("{:#}", resolve_in_clone(dir.path()).unwrap_err());
         assert!(err.contains("pyproject.toml"), "must name the layer, got: {err}");
         assert!(err.contains("ruff | tee"), "must name the command, got: {err}");
     }
@@ -644,7 +665,8 @@ mod tests {
         )
         .unwrap();
 
-        let config = Config::resolved_from(dir.path(), "ty check").unwrap();
+        let config =
+            Config::resolved_from(dir.path(), &dir.path().join(".git"), "ty check").unwrap();
         assert_eq!(
             names(&config.check),
             ["ruff check"],
@@ -654,6 +676,46 @@ mod tests {
             names(&config.fix),
             ["ruff fix", "ruff format"],
             "and it never touches the fix phase: half-formatted files are worse than none"
+        );
+    }
+
+    /// The shape of a linked worktree: `<root>/.git` is a file naming the
+    /// clone's metadata directory, not a directory of its own.
+    ///
+    /// Joining the overlay's name onto it aims a read at a path *through* a
+    /// file, which fails with `Not a directory` — not with `NotFound` — and so
+    /// aborted the whole run before a single check had been started.
+    #[test]
+    fn the_overlay_is_read_from_the_git_directory_a_worktree_points_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("task-42");
+        let git_dir = dir.path().join("clone/.git");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(git_dir.join("worktrees/task-42")).unwrap();
+        std::fs::write(root.join(".git"), "gitdir: ../clone/.git/worktrees/task-42\n").unwrap();
+        std::fs::write(overlay_path(&git_dir), "extend_check = [\"bandit\"]\n").unwrap();
+
+        let config = Config::resolve(&root, &git_dir).unwrap();
+        assert_eq!(
+            names(&config.check),
+            ["ruff check", "ty check", "bandit"],
+            "the overlay belongs to the clone, and every worktree of it runs with it"
+        );
+    }
+
+    #[test]
+    fn a_missing_overlay_in_a_worktree_is_still_just_the_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("task-42");
+        let git_dir = dir.path().join("clone/.git");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(root.join(".git"), "gitdir: ../clone/.git/worktrees/task-42\n").unwrap();
+
+        assert_eq!(
+            Config::resolve(&root, &git_dir).unwrap(),
+            Config::default(),
+            "no overlay is no overlay; the `.git` file next to the checkout is not one"
         );
     }
 

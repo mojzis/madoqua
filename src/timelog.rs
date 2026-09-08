@@ -1,9 +1,9 @@
 //! The timing log: one JSON object per run, appended to a `.jsonl` file.
 //!
-//! The default lives inside the repository, where it is per-project and gets
-//! thrown away with the clone. Pointing `log` at a path under `$HOME` collects
-//! every repo's runs in one place instead, and records written there carry a
-//! `repo` field so [`crate::stats`] can tell them apart.
+//! The default lives in the repository's git directory, where it is per-project
+//! and gets thrown away with the clone. Pointing `log` at a path under `$HOME`
+//! collects every repo's runs in one place instead, and records written there
+//! carry a `repo` field so [`crate::stats`] can tell them apart.
 //!
 //! Writing the log is best-effort by design: a hook that blocks a commit
 //! because it could not write a timing record would be a worse tool than one
@@ -16,8 +16,13 @@ use anyhow::{Context, Result};
 
 use crate::report::RunRecord;
 
-/// Where timings go when nothing says otherwise.
-pub const DEFAULT_LOG: &str = ".git/hook-timings.jsonl";
+/// What the log is called when nothing says otherwise.
+///
+/// It sits in the repository's git directory — `<root>/.git` for an ordinary
+/// checkout, and the clone's `.git` for every one of its linked worktrees, so
+/// one repository has one history however many worktrees it is checked out
+/// in.
+pub const DEFAULT_LOG_NAME: &str = "hook-timings.jsonl";
 
 /// A resolved log destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,18 +33,35 @@ pub struct LogTarget {
     pub repo: Option<String>,
 }
 
-/// Resolve the configured log path against `root`.
+/// Resolve the configured log path for the working tree at `root`, whose git
+/// directory is `git_dir`.
 ///
-/// `~` expands to `home`, a relative path is relative to the repository root,
-/// and a path that lands outside the repository turns on the `repo` field.
-pub fn target(root: &Path, configured: Option<&str>, home: Option<&Path>) -> LogTarget {
-    let raw = configured.unwrap_or(DEFAULT_LOG);
-    let expanded = expand_home(raw, home);
+/// With nothing configured the log is [`DEFAULT_LOG_NAME`] in the git
+/// directory. Otherwise `~` expands to `home` and a relative path is relative
+/// to the repository root — the working tree is what a developer writing
+/// `build/timings.jsonl` is thinking about.
+///
+/// A path that lands outside the repository turns on the `repo` field.
+/// "Outside" means outside both directories: a linked worktree's git directory
+/// is not under its working tree, and the runs of every worktree of one clone
+/// are the runs of one repository, with nothing to disambiguate.
+pub fn target(
+    root: &Path,
+    git_dir: &Path,
+    configured: Option<&str>,
+    home: Option<&Path>,
+) -> LogTarget {
+    let git_dir = normalise(git_dir);
+    let path = match configured {
+        None => git_dir.join(DEFAULT_LOG_NAME),
+        Some(raw) => {
+            let expanded = expand_home(raw, home);
+            normalise(&if expanded.is_absolute() { expanded } else { root.join(expanded) })
+        }
+    };
 
-    let joined = if expanded.is_absolute() { expanded } else { root.join(expanded) };
-    let path = normalise(&joined);
-
-    let repo = (!path.starts_with(root))
+    let inside = path.starts_with(root) || path.starts_with(&git_dir);
+    let repo = (!inside)
         .then(|| root.file_name().map(|name| name.to_string_lossy().into_owned()))
         .flatten();
 
@@ -73,9 +95,9 @@ fn is_named(component: Component<'_>) -> bool {
 }
 
 /// [`target`] against the real environment.
-pub fn resolve(root: &Path, configured: Option<&str>) -> LogTarget {
+pub fn resolve(root: &Path, git_dir: &Path, configured: Option<&str>) -> LogTarget {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    target(root, configured, home.as_deref())
+    target(root, git_dir, configured, home.as_deref())
 }
 
 fn expand_home(raw: &str, home: Option<&Path>) -> PathBuf {
@@ -134,6 +156,16 @@ mod tests {
         PathBuf::from("/home/dev/src/project")
     }
 
+    /// The git directory of an ordinary checkout of [`root`].
+    fn git_dir() -> PathBuf {
+        root().join(".git")
+    }
+
+    /// [`target`] for an ordinary checkout, where the two directories are one.
+    fn in_clone(configured: Option<&str>) -> LogTarget {
+        target(&root(), &git_dir(), configured, Some(Path::new(HOME)))
+    }
+
     fn record() -> RunRecord {
         RunRecord {
             ts: "2026-08-31T12:03:22Z".to_owned(),
@@ -147,16 +179,44 @@ mod tests {
     }
 
     #[test]
-    fn the_default_log_lives_in_the_repo_and_needs_no_repo_field() {
-        let target = target(&root(), None, Some(Path::new(HOME)));
-        assert_eq!(target.path, root().join(DEFAULT_LOG));
+    fn the_default_log_lives_in_the_git_directory_and_needs_no_repo_field() {
+        let target = in_clone(None);
+        assert_eq!(target.path, git_dir().join(DEFAULT_LOG_NAME));
         assert_eq!(target.repo, None, "a per-repo log does not need to say which repo");
+    }
+
+    /// A linked worktree's git directory belongs to the clone and sits outside
+    /// the worktree entirely. Joining `.git/` onto the working tree would aim
+    /// the log at a path through a *file*, which is the whole bug.
+    #[test]
+    fn a_worktrees_default_log_goes_to_the_clones_git_directory() {
+        let worktree = PathBuf::from("/home/dev/src/task-42");
+        let target = target(&worktree, &git_dir(), None, Some(Path::new(HOME)));
+
+        assert_eq!(target.path, git_dir().join(DEFAULT_LOG_NAME));
+        assert_eq!(
+            target.repo, None,
+            "every worktree of a clone is the same repository, so there is nothing to \
+             disambiguate — one repo, one history, however many checkouts of it there are"
+        );
+    }
+
+    #[test]
+    fn a_worktrees_relative_log_is_still_relative_to_its_own_working_tree() {
+        let worktree = PathBuf::from("/home/dev/src/task-42");
+        let target = target(&worktree, &git_dir(), Some("build/t.jsonl"), Some(Path::new(HOME)));
+
+        assert_eq!(
+            target.path,
+            worktree.join("build/t.jsonl"),
+            "a configured relative path is about the files being checked, not the metadata"
+        );
+        assert_eq!(target.repo, None, "and it landed inside the checkout it came from");
     }
 
     #[test]
     fn a_tilde_path_expands_and_turns_on_the_repo_field() {
-        let target =
-            target(&root(), Some("~/.local/state/madoqua/timings.jsonl"), Some(Path::new(HOME)));
+        let target = in_clone(Some("~/.local/state/madoqua/timings.jsonl"));
         assert_eq!(target.path, PathBuf::from("/home/dev/.local/state/madoqua/timings.jsonl"));
         assert_eq!(
             target.repo.as_deref(),
@@ -167,7 +227,7 @@ mod tests {
 
     #[test]
     fn a_path_that_climbs_out_of_the_repo_still_names_the_repo() {
-        let target = target(&root(), Some("../shared.jsonl"), Some(Path::new(HOME)));
+        let target = in_clone(Some("../shared.jsonl"));
         assert_eq!(target.path, PathBuf::from("/home/dev/src/shared.jsonl"));
         assert_eq!(
             target.repo.as_deref(),
@@ -178,34 +238,34 @@ mod tests {
 
     #[test]
     fn a_path_that_climbs_out_and_back_in_is_inside_the_repo() {
-        let target = target(&root(), Some("../project/build/t.jsonl"), Some(Path::new(HOME)));
+        let target = in_clone(Some("../project/build/t.jsonl"));
         assert_eq!(target.path, root().join("build/t.jsonl"));
         assert_eq!(target.repo, None, "the long way round still lands in the same repo");
     }
 
     #[test]
     fn a_relative_path_is_relative_to_the_repo_root() {
-        let target = target(&root(), Some("build/timings.jsonl"), Some(Path::new(HOME)));
+        let target = in_clone(Some("build/timings.jsonl"));
         assert_eq!(target.path, root().join("build/timings.jsonl"));
         assert_eq!(target.repo, None);
     }
 
     #[test]
     fn an_absolute_path_outside_the_repo_names_the_repo() {
-        let target = target(&root(), Some("/var/log/madoqua.jsonl"), Some(Path::new(HOME)));
+        let target = in_clone(Some("/var/log/madoqua.jsonl"));
         assert_eq!(target.path, PathBuf::from("/var/log/madoqua.jsonl"));
         assert_eq!(target.repo.as_deref(), Some("project"));
     }
 
     #[test]
     fn a_bare_tilde_is_the_home_directory() {
-        let target = target(&root(), Some("~"), Some(Path::new(HOME)));
+        let target = in_clone(Some("~"));
         assert_eq!(target.path, PathBuf::from(HOME));
     }
 
     #[test]
     fn without_a_home_a_tilde_stays_literal_rather_than_guessing() {
-        let target = target(&root(), Some("~/timings.jsonl"), None);
+        let target = target(&root(), &git_dir(), Some("~/timings.jsonl"), None);
         assert_eq!(target.path, root().join("~/timings.jsonl"));
     }
 

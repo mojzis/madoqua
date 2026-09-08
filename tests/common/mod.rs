@@ -24,15 +24,23 @@ use assert_cmd::Command;
 use assert_cmd::assert::Assert;
 use tempfile::TempDir;
 
-/// A throwaway git repository with a stub virtualenv.
+/// A throwaway checkout with a stub virtualenv: either a git repository of its
+/// own, or a linked worktree of one.
+///
+/// `root` is the working tree the tests drive; it is the temporary directory
+/// itself for a clone, and a subdirectory of it for a worktree, since
+/// `git worktree add` insists on creating the directory it is given.
 pub struct Repo {
     dir: TempDir,
+    root: PathBuf,
 }
 
 impl Repo {
     /// An initialised repository with one commit, so `HEAD` resolves.
     pub fn new() -> Self {
-        let repo = Self { dir: tempfile::tempdir().expect("a temp dir") };
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = dir.path().to_path_buf();
+        let repo = Self { dir, root };
         repo.git(&["init", "-q", "-b", "main"]);
         repo.git(&["config", "user.email", "test@example.invalid"]);
         repo.git(&["config", "user.name", "madoqua tests"]);
@@ -51,7 +59,33 @@ impl Repo {
     }
 
     pub fn path(&self) -> &Path {
-        self.dir.path()
+        &self.root
+    }
+
+    /// A linked worktree of this repository, checked out on a new branch.
+    ///
+    /// Its `.git` is a *file* pointing into this clone's metadata directory,
+    /// which is the whole point: every path madoqua resolves under `.git` has
+    /// to survive that. The stub venv is copied rather than inherited, because
+    /// `.venv` is ignored and a fresh checkout of the repository has none.
+    ///
+    /// The repository it came from has to outlive the worktree, which in a
+    /// test means holding on to both.
+    pub fn worktree(&self, branch: &str) -> Self {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = dir.path().join("wt");
+        self.git(&["worktree", "add", "-q", "-b", branch, root.to_str().expect("a utf-8 path")]);
+
+        let worktree = Self { dir, root };
+        copy_dir(&self.path().join(".venv/bin"), &worktree.path().join(".venv/bin"));
+        worktree
+    }
+
+    /// Git's common directory for this checkout: `<root>/.git` for a clone,
+    /// and the clone's `.git` for a linked worktree.
+    pub fn git_dir(&self) -> PathBuf {
+        let reported = self.git(&["rev-parse", "--git-common-dir"]);
+        self.path().join(reported.trim())
     }
 
     fn with_venv(&self) -> &Self {
@@ -143,9 +177,15 @@ impl Repo {
             .expect("git is runnable")
     }
 
+    /// Where the default timing log lives for this checkout.
+    pub fn log_path(&self) -> PathBuf {
+        self.git_dir().join("hook-timings.jsonl")
+    }
+
     /// The parsed timing log, one entry per line.
     pub fn log_records(&self) -> Vec<serde_json::Value> {
-        self.read(".git/hook-timings.jsonl")
+        std::fs::read_to_string(self.log_path())
+            .unwrap_or_default()
             .lines()
             .map(|line| {
                 serde_json::from_str(line)
@@ -155,7 +195,18 @@ impl Repo {
     }
 
     pub fn log_exists(&self) -> bool {
-        self.path().join(".git/hook-timings.jsonl").exists()
+        self.log_path().exists()
+    }
+}
+
+/// Copy a flat directory's files, keeping their permissions.
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        std::fs::copy(entry.path(), &target).unwrap();
+        std::fs::set_permissions(&target, entry.metadata().unwrap().permissions()).unwrap();
     }
 }
 

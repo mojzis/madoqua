@@ -20,7 +20,7 @@ check = [
   "ruff check --quiet",
   { name = "ty", cmd = "ty check", pass_files = true, timeout_s = 120, max_output_lines = 200 },
 ]
-# log = ".git/hook-timings.jsonl"
+# log = "build/timings.jsonl"   # default: hook-timings.jsonl in the git dir
 ```
 
 An entry is either a command line or a table:
@@ -40,9 +40,9 @@ the script.
 
 ## The personal overlay
 
-`<repo_root>/.git/hooks.local.toml` is the same schema at the top level, and is
-not committed — it is where your own preferences go without imposing them on
-everyone else:
+`hooks.local.toml` in the repository's git directory is the same schema at the
+top level, and is not committed — it is where your own preferences go without
+imposing them on everyone else:
 
 ```toml
 extend_check = ["bandit -q -r src"]
@@ -55,6 +55,19 @@ Four lines of semantics, also in `madoqua run --help`:
 - `extend_check` / `extend_fix` **append** to the repo's list.
 - Scalar keys (`log`, …) — the overlay wins.
 - A layer that says nothing about a key leaves it alone.
+
+## Worktrees share one git directory
+
+The overlay and the default timing log live in the repository's git directory:
+`<repo_root>/.git` in an ordinary clone, and the clone's `.git` in a linked
+worktree, where `<worktree>/.git` is a file pointing at it. madoqua asks git
+(`git rev-parse --git-common-dir`) instead of joining `.git/` onto the working
+tree, so one overlay configures every worktree of a repository and one log
+holds every worktree's runs.
+
+That is deliberate, and it is what makes an overlay useful in the
+worktree-per-task workflow: a per-checkout overlay would have to be written
+again for every task branch and would vanish with `git worktree remove`.
 
 ## Skipping a check once
 
@@ -73,11 +86,12 @@ rather than being reported as applied — no check reports a missing formatter.
 
 ## Where timings go
 
-`log` defaults to `.git/hook-timings.jsonl`, which is per-repo and disappears
-with the clone. Point it at `~/…` to collect every repo's runs in one place —
-`~` expands, parent directories are created, and records written outside the
-repository carry a `repo` field so [`stats --repo`](commands/stats.md) can tell
-them apart.
+`log` defaults to `hook-timings.jsonl` in the git directory, which is per-repo
+and disappears with the clone. A configured path is relative to the working
+tree instead — that is where `build/timings.jsonl` belongs. Point it at `~/…`
+to collect every repo's runs in one place — `~` expands, parent directories are
+created, and records written outside the repository carry a `repo` field so
+[`stats --repo`](commands/stats.md) can tell them apart.
 
 Writing the log is best-effort. A failure warns on stderr and the commit
 proceeds.

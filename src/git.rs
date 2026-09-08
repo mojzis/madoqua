@@ -23,6 +23,28 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(line))
 }
 
+/// Git's common directory for the repository at `root`: the one directory
+/// every worktree of a clone shares.
+///
+/// `<root>/.git` for an ordinary checkout. In a linked worktree `<root>/.git`
+/// is a *file* naming the metadata directory instead, so anything madoqua
+/// keeps "in `.git`" has to be resolved through git rather than joined onto
+/// the working tree — a joined path is a path through a file, and reading it
+/// fails with `Not a directory` before a single check has run.
+///
+/// `--git-common-dir` answers relative to the working directory, which is why
+/// this is run from `root` and not from wherever the caller stood: the answer
+/// is then `.git` for a clone and an absolute path for a worktree.
+pub fn common_dir(root: &Path) -> Result<PathBuf> {
+    let output = run(root, &["rev-parse", "--git-common-dir"])?;
+    let text = stdout_text(&output);
+    let line = text.trim();
+    if line.is_empty() {
+        bail!("git did not report a git directory for {}", root.display());
+    }
+    Ok(root.join(line))
+}
+
 /// The staged Python files, relative to the repository root.
 ///
 /// `--diff-filter=ACMR` skips deletions — running a formatter on a path that

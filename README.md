@@ -52,7 +52,8 @@ check = [
 ]
 ```
 
-`.git/hooks.local.toml` is a personal, uncommitted overlay on the same schema:
+`hooks.local.toml` in the repo's git directory — `.git/hooks.local.toml` in an
+ordinary clone — is a personal, uncommitted overlay on the same schema:
 `check`/`fix` replace a list, `extend_check`/`extend_fix` append to it, scalars
 win. `MADOQUA_SKIP="ty,ruff check"` drops checks by name for one run.
 

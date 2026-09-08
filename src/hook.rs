@@ -25,7 +25,10 @@ use crate::{clock, git, runner, timelog, venv};
 pub fn run(start: &Path, out: &mut impl Write) -> Result<Outcome> {
     let started = Instant::now();
     let root = git::repo_root(start)?;
-    let config = Config::resolve(&root)?;
+    // Where git keeps this repository's metadata, which is not `<root>/.git`
+    // when the run is happening in a linked worktree.
+    let git_dir = git::common_dir(&root)?;
+    let config = Config::resolve(&root, &git_dir)?;
 
     // The guard comes before the file list, as it does in the bash version: a
     // repo whose venv is missing is misconfigured whether or not this
@@ -53,7 +56,7 @@ pub fn run(start: &Path, out: &mut impl Write) -> Result<Outcome> {
     steps.extend(runner::run_checks(&root, &config.check, &files, &venv.env));
 
     let total = started.elapsed();
-    write_log(&root, &config, &files, &steps, venv.auto_activated, total);
+    write_log(&root, &git_dir, &config, &files, &steps, venv.auto_activated, total);
 
     let failures: Vec<&StepResult> = steps.iter().filter(|step| blocks(step)).collect();
 
@@ -83,13 +86,14 @@ fn blocks(step: &StepResult) -> bool {
 /// Append the run to the timing log, and never let that stop a commit.
 fn write_log(
     root: &Path,
+    git_dir: &Path,
     config: &Config,
     files: &[String],
     steps: &[StepResult],
     venv_auto_activated: bool,
     total: Duration,
 ) {
-    let target = timelog::resolve(root, config.log.as_deref());
+    let target = timelog::resolve(root, git_dir, config.log.as_deref());
     let record = RunRecord {
         ts: clock::format_rfc3339_utc(clock::now_unix()),
         repo: target.repo.clone(),

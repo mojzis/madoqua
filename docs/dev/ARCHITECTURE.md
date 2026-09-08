@@ -10,10 +10,10 @@ How the crate is put together. For *why*, and what each choice cost, see
 | `main.rs` | Parse arguments, set up tracing, map `Outcome` to an exit code. Nothing else. | |
 | `cli.rs` | The `clap` definitions and the body of every command. | |
 | `hook.rs` | The pipeline, and the wording of the verdict. | |
-| `config.rs` | What to run: `[tool.madoqua]`, the `.git/hooks.local.toml` overlay, `MADOQUA_SKIP`, the merge rules, command splitting. | reads two files and one variable |
+| `config.rs` | What to run: `[tool.madoqua]`, the `hooks.local.toml` overlay in the git directory, `MADOQUA_SKIP`, the merge rules, command splitting. | reads two files and one variable |
 | `stats.rs` | Percentiles and the table. Pure. | |
 | `report.rs` | The JSON wire formats — the log record and `stats --json`. Field names here are public contract. | |
-| `git.rs` | **Every** `git` invocation in the crate. | yes |
+| `git.rs` | **Every** `git` invocation in the crate, including *where* the repository is: the working tree root and the git directory the overlay and the log live in. | yes |
 | `runner.rs` | **Every other** process spawn: fix sequentially, checks in parallel, timeouts, output capture and truncation. | yes |
 | `venv.rs` | The virtualenv guard and the `PATH` children inherit. `plan` is pure; `guard` is the one-line impure wrapper. | yes |
 | `timelog.rs` | Resolving the log path (`~`, in-repo or not) and appending to it. | yes |
