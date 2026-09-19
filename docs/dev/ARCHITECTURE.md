@@ -14,7 +14,7 @@ How the crate is put together. For *why*, and what each choice cost, see
 | `stats.rs` | Percentiles and the table. Pure. | |
 | `report.rs` | The JSON wire formats — the log record and `stats --json`. Field names here are public contract. | |
 | `git.rs` | **Every** `git` invocation in the crate, including *where* the repository is: the working tree root and the git directory the overlay and the log live in. | yes |
-| `runner.rs` | **Every other** process spawn: fix sequentially, checks in parallel, timeouts, output capture and truncation. | yes |
+| `runner.rs` | **Every other** process spawn: fix sequentially, checks in parallel, timeouts, output capture and truncation. Every tool is built by `tool_command`, which strips the variables that pin git to a repository (`GIT_DIR`, `GIT_INDEX_FILE`, …). | yes |
 | `venv.rs` | The virtualenv guard and the `PATH` children inherit. `plan` is pure; `guard` is the one-line impure wrapper. | yes |
 | `timelog.rs` | Resolving the log path (`~`, in-repo or not) and appending to it. | yes |
 | `clock.rs` | The wall clock, and RFC 3339 without a date crate. | yes |

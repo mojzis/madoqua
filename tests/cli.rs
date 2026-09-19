@@ -387,3 +387,36 @@ fn an_unknown_guide_topic_could_not_complete() {
         .code(2)
         .stderr(predicate::str::contains("how"));
 }
+
+/// The incident this guards against: a commit from a linked worktree, where
+/// git exports `GIT_DIR` and `GIT_INDEX_FILE` to the hook, ran a test suite
+/// whose `git init` + `git config` in a temporary directory rewrote the real
+/// repository's config instead.
+#[test]
+fn a_commit_from_a_linked_worktree_does_not_let_a_tools_git_reach_the_repository() {
+    let repo = Repo::new();
+    let scratch = tempfile::tempdir().unwrap();
+    common::with_a_git_using_check(&repo, scratch.path());
+    repo.madoqua().arg("install").assert().success();
+    repo.git(&["add", "--", "pyproject.toml", "hooks/pre-commit"]);
+    // The hook is installed already; the wiring commit is not what is under test.
+    repo.git(&["commit", "-qm", "wire madoqua", "--no-verify"]);
+    let main_before = repo.git(&["rev-parse", "main"]);
+
+    let worktree = repo.worktree("task");
+    worktree.stage("a.py", "x = 1\n");
+    let output = worktree.commit("add a.py");
+
+    assert!(
+        output.status.success(),
+        "the commit was blocked: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    common::assert_tool_git_stayed_in_its_own_repo(&repo, scratch.path());
+    assert_eq!(repo.git(&["rev-parse", "main"]), main_before, "and `main` did not move");
+    assert_eq!(
+        worktree.git(&["rev-list", "--count", "HEAD"]).trim(),
+        "3",
+        "the worktree's commit itself went through"
+    );
+}

@@ -260,3 +260,55 @@ pub fn only_line(stdout: &[u8]) -> String {
     assert_eq!(lines.len(), 1, "a clean run says one thing; got: {text:?}");
     lines[0].to_owned()
 }
+
+/// A stub tool that does what a test suite running real git does: it makes a
+/// throwaway repository of its own and writes to its config. It also records
+/// which `GIT_*` location variables it was handed, and where git thought the
+/// repository was.
+pub fn with_a_git_using_check(repo: &Repo, scratch: &Path) {
+    let body = format!(
+        r#"export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+scratch='{scratch}'
+env | grep -E '^GIT_(DIR|INDEX_FILE|WORK_TREE|PREFIX|COMMON_DIR)=' > "$scratch/seen-env"
+git init -q "$scratch/b" || exit 3
+cd "$scratch/b" || exit 3
+git config madoqua.leaked yes || exit 3
+git rev-parse --absolute-git-dir > "$scratch/seen-git-dir"
+exit 0"#,
+        scratch = scratch.display()
+    );
+    repo.tool("gitcheck", &body);
+    repo.write("pyproject.toml", "[tool.madoqua]\nfix = []\ncheck = [\"gitcheck\"]\n");
+}
+
+/// Assert that a tool's own `git` calls went to its own repository and left
+/// the one being committed to alone.
+pub fn assert_tool_git_stayed_in_its_own_repo(repo: &Repo, scratch: &Path) {
+    assert_eq!(
+        String::from_utf8_lossy(
+            &repo
+                .git_command()
+                .args(["config", "--get", "madoqua.leaked"])
+                .output()
+                .unwrap()
+                .stdout
+        ),
+        "",
+        "the tool's `git config` landed in the repository being committed to"
+    );
+    assert_eq!(
+        repo.git(&["config", "--get", "core.bare"]).trim(),
+        "false",
+        "and the repository being committed to is still not bare"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("seen-env")).unwrap(),
+        "",
+        "the tool must not inherit the variables that pin git to the hook's repository"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.join("seen-git-dir")).unwrap().trim(),
+        std::fs::canonicalize(scratch.join("b/.git")).unwrap().to_str().unwrap(),
+        "git inside the tool has to find the repository the tool made"
+    );
+}
