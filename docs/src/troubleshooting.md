@@ -91,6 +91,30 @@ worktree failed with `cannot read …/.git/hooks.local.toml: Not a directory
 than working around it: the tools madoqua runs are the ones guarding the
 commit.
 
+## My tests' `git` changed the real repository
+
+A test suite that runs real git in a temporary directory — `git init` in
+`tmp_path`, then `git config`, `git commit`, `git push` — can end up operating
+on the repository you are committing to. git exports `GIT_DIR` and
+`GIT_INDEX_FILE` (and sometimes `GIT_WORK_TREE`, `GIT_PREFIX`, `-c` settings)
+to every hook, and a git that inherits `GIT_DIR` ignores the directory it is
+run in. From a linked worktree the damage is worst: `core.bare = true` and a
+`user.name` written into the clone's config, branches replaced, junk commits
+pushed.
+
+madoqua 0.2.4 and later remove those variables — everything
+`git rev-parse --local-env-vars` lists, plus `GIT_NAMESPACE` and
+`GIT_CEILING_DIRECTORIES` — from the environment of every tool it runs, and
+runs each tool from the repository root. `GIT_AUTHOR_*`, `GIT_COMMITTER_*` and
+`GIT_SSH*` are left alone. madoqua's own `git` calls still see the hook's
+environment, since they are about the repository being committed to.
+
+On 0.2.3 and earlier, upgrade. If you have been bitten, check
+`git config --local --list` for `core.bare` and `user.*` entries you did not
+set, and `git reflog` for branches that moved. A test suite that must also run
+under other hook runners can protect itself by deleting those variables in a
+fixture before it touches git.
+
 ## A commit went through with unformatted code
 
 madoqua only sees `git diff --cached`. If a file was not staged, it was not

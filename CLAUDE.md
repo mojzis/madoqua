@@ -91,6 +91,12 @@ invariant the code no longer upholds is a bug in one of the two.
   onto the working tree. In a linked worktree the join is a path through a
   *file*: it fails with `Not a directory`, which is not `NotFound` and so is
   not forgiven, and the whole run dies with `2` before a check has started.
+- **Tools never see the hook's git location variables.** git exports
+  `GIT_DIR`, `GIT_INDEX_FILE` and friends to hooks; a tool that inherits them
+  and runs git in a temp repo (a test suite) rewrites the real repository
+  instead. Every tool is built by `runner::tool_command`, which removes
+  `GIT_REPOSITORY_VARS`; madoqua's own calls in `git.rs` keep the environment.
+  A second way to spawn a tool is a bug.
 - **Logging is best-effort.** A failure to write the timing log warns on stderr
   and the commit proceeds. Nothing about timings may ever block a commit.
 - **A no-op run is not logged.** Runs with no staged Python files write

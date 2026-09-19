@@ -31,6 +31,45 @@ pub const EXIT_TIMED_OUT: i32 = -1;
 /// An uninstalled tool, an empty command, or a child madoqua lost track of.
 pub const EXIT_NOT_RUN: i32 = 127;
 
+/// The variables that pin git to one particular repository, removed from every
+/// tool's environment.
+///
+/// git exports `GIT_DIR` and `GIT_INDEX_FILE` to hooks — and, depending on how
+/// it was invoked, `GIT_WORK_TREE`, `GIT_PREFIX` and `-c` settings too. A tool
+/// that inherits them and runs git itself, as a test suite that builds a
+/// throwaway repository in a temp directory does, operates on the repository
+/// being committed to instead of its own: its `git init` + `git config` rewrite
+/// the real config, its commits and pushes move the real branches.
+///
+/// The first block is `git rev-parse --local-env-vars` as of git 2.55, the set
+/// git itself clears when it moves into another repository (a submodule, say).
+/// It is written out rather than asked for because the answer would cost a
+/// spawn on every run and changes rarely. The second block is what
+/// git does not list but still reads to decide which repository it is in.
+///
+/// madoqua's own `git` calls keep these: they are about the repository being
+/// committed to, and in a linked worktree `GIT_DIR` is how they find it.
+const GIT_REPOSITORY_VARS: [&str; 17] = [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+    // Not in git's list, but repository-locating all the same.
+    "GIT_NAMESPACE",
+    "GIT_CEILING_DIRECTORIES",
+];
+
 /// The shell's convention for "died of signal N".
 #[cfg(unix)]
 const SIGNAL_BASE: i32 = 128;
@@ -202,18 +241,8 @@ fn spawn_and_wait(root: &Path, step: &Step, files: &[String], env: &ChildEnv) ->
         return Spawned::NeverStarted("madoqua: empty command\n".to_owned());
     };
 
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(root)
-        .env("PATH", &env.path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    if let Some(virtual_env) = &env.virtual_env {
-        command.env("VIRTUAL_ENV", virtual_env);
-    }
+    let mut command = tool_command(program, root, env);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if step.pass_files {
         command.args(files);
     }
@@ -252,6 +281,24 @@ fn spawn_and_wait(root: &Path, step: &Step, files: &[String], env: &ChildEnv) ->
             step.name
         )),
     }
+}
+
+/// The one way a tool's process is built: run from the repository root, with
+/// the venv's `PATH`, and without the variables that would point its own git
+/// calls at the repository being committed to ([`GIT_REPOSITORY_VARS`]).
+///
+/// Everything else is inherited — `HOME`, `GIT_AUTHOR_*`, `GIT_SSH_COMMAND` and
+/// the like are about the developer, not the repository, and tools need them.
+fn tool_command(program: &str, root: &Path, env: &ChildEnv) -> Command {
+    let mut command = Command::new(program);
+    command.current_dir(root).env("PATH", &env.path);
+    for var in GIT_REPOSITORY_VARS {
+        command.env_remove(var);
+    }
+    if let Some(virtual_env) = &env.virtual_env {
+        command.env("VIRTUAL_ENV", virtual_env);
+    }
+    command
 }
 
 /// A pipe being drained on its own thread, whose buffer can be read before the
@@ -346,6 +393,28 @@ mod tests {
             timeout: None,
             max_output_lines: None,
         }
+    }
+
+    #[test]
+    fn a_tool_command_drops_every_repository_variable_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = tool_command("ruff", dir.path(), &env());
+        let envs: std::collections::HashMap<_, _> = command.get_envs().collect();
+
+        for var in GIT_REPOSITORY_VARS {
+            assert_eq!(
+                envs.get(std::ffi::OsStr::new(var)),
+                Some(&None),
+                "{var} must be removed, or a tool's git operates on the hook's repository"
+            );
+        }
+        for kept in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL", "GIT_SSH_COMMAND", "HOME"] {
+            assert!(
+                !envs.contains_key(std::ffi::OsStr::new(kept)),
+                "{kept} is about the developer, not the repository, and stays inherited"
+            );
+        }
+        assert_eq!(command.get_current_dir(), Some(dir.path()), "tools run from the root");
     }
 
     #[test]

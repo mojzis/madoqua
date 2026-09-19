@@ -393,3 +393,26 @@ fn a_run_in_a_linked_worktree_logs_to_the_clones_git_directory() {
         "and nothing turned the worktree's `.git` file into a directory of its own"
     );
 }
+
+#[test]
+fn tools_do_not_inherit_the_git_variables_that_point_at_the_hooks_repository() {
+    let repo = Repo::new();
+    let scratch = tempfile::tempdir().unwrap();
+    common::with_a_git_using_check(&repo, scratch.path());
+    repo.stage("a.py", "x = 1\n");
+    let git_dir = std::fs::canonicalize(repo.git_dir()).unwrap();
+
+    // What git exports to a hook: the repository, its index, its working tree.
+    let assert = repo
+        .madoqua()
+        .arg("run")
+        .env("GIT_DIR", &git_dir)
+        .env("GIT_INDEX_FILE", git_dir.join("index"))
+        .env("GIT_WORK_TREE", repo.path())
+        .env("GIT_PREFIX", "")
+        .assert();
+    let output = assert.get_output();
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", common::stderr(&assert));
+
+    common::assert_tool_git_stayed_in_its_own_repo(&repo, scratch.path());
+}
