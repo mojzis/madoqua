@@ -399,7 +399,8 @@ fn a_commit_from_a_linked_worktree_does_not_let_a_tools_git_reach_the_repository
     common::with_a_git_using_check(&repo, scratch.path());
     repo.madoqua().arg("install").assert().success();
     repo.git(&["add", "--", "pyproject.toml", "hooks/pre-commit"]);
-    repo.git(&["commit", "-qm", "wire madoqua"]);
+    // The hook is installed already; the wiring commit is not what is under test.
+    repo.git(&["commit", "-qm", "wire madoqua", "--no-verify"]);
     let main_before = repo.git(&["rev-parse", "main"]);
 
     let worktree = repo.worktree("task");
