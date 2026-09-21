@@ -7,6 +7,12 @@
 //! processes get, and setting `VIRTUAL_ENV`, which is all `activate` does that
 //! a child can observe.
 //!
+//! Both happen on every run, not only when the guard finds the venv missing
+//! from `PATH`. Where `python` resolves says nothing about where `pytest`
+//! does: a half-activated shell can have the venv's interpreter in front and a
+//! version manager's directory in front of *that*, so a check — or a process a
+//! check spawns by name — picks up the wrong tool.
+//!
 //! [`plan`] is pure: it takes the current `PATH` and a filesystem oracle, so
 //! every branch is testable on a machine that has no virtualenv at all.
 
@@ -53,18 +59,19 @@ impl Fs for RealFs {
 /// The environment overrides every child process of the run receives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildEnv {
-    /// The `PATH` to run tools with, `.venv/bin` first when we activated it.
+    /// The `PATH` to run tools with, `.venv/bin` first.
     pub path: OsString,
-    /// `VIRTUAL_ENV`, set only when we activated the venv ourselves.
-    pub virtual_env: Option<PathBuf>,
+    /// `VIRTUAL_ENV`, always the repo's venv: the guard only passes when that
+    /// is the venv the tools will run from, so there is nothing else to say.
+    pub virtual_env: PathBuf,
 }
 
 /// A passing guard: which environment to use, and whether we had to fix it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Venv {
-    /// True when `.venv` was not already on `PATH` and we put it there. The
-    /// verdict says so, because it means the developer's shell is not set up
-    /// the way they probably think it is.
+    /// True when `.venv/bin` was not already the front of `PATH` and we put it
+    /// there. The verdict says so, because it means the developer's shell is
+    /// not set up the way they probably think it is.
     pub auto_activated: bool,
     /// What to hand to [`crate::runner`].
     pub env: ChildEnv,
@@ -85,23 +92,20 @@ impl std::error::Error for VenvError {}
 
 /// Decide which environment to run in, given the current `PATH`.
 ///
-/// If the `python` on `PATH` lives in `<root>/.venv/bin`, nothing happens.
-/// Otherwise, if the venv exists, `.venv/bin` goes to the front of `PATH` and
-/// the check is repeated — an activation that does not actually win is a
+/// `<root>/.venv/bin` goes to the front of `PATH` unless it is there already,
+/// and `VIRTUAL_ENV` is always set: a `python` that resolves into the venv is
+/// not evidence that anything else does. The venv has to exist, and it has to
+/// win once it is in front — an activation that does not actually win is a
 /// failure, not a shrug.
 pub fn plan(root: &Path, path_value: &OsStr, fs: &impl Fs) -> Result<Venv, VenvError> {
     let venv = root.join(".venv");
     let bin = venv.join("bin");
     let python = bin.join("python");
 
-    if resolves_to(path_value, &python, fs) {
-        return Ok(Venv {
-            auto_activated: false,
-            env: ChildEnv { path: path_value.to_os_string(), virtual_env: None },
-        });
-    }
-
-    if !fs.exists(&bin.join("activate")) {
+    // Whether a venv is there at all is only worth asking when `PATH` does not
+    // already reach its python: a venv whose interpreter is running is a venv,
+    // whatever `activate` scripts it was or was not built with.
+    if !resolves_to(path_value, &python, fs) && !fs.exists(&bin.join("activate")) {
         return Err(VenvError(format!(
             "madoqua: no virtualenv at {}\n  \
              create one and install the tools the hook runs:\n      \
@@ -111,8 +115,13 @@ pub fn plan(root: &Path, path_value: &OsStr, fs: &impl Fs) -> Result<Venv, VenvE
         )));
     }
 
-    let activated = prepend(&bin, path_value);
-    if !resolves_to(&activated, &python, fs) {
+    // The rest of `PATH` is kept, in order, behind the venv. An entry that is
+    // now a duplicate of `.venv/bin` costs a stat and changes no lookup;
+    // dropping entries would change what tools a check can still reach.
+    let leads = leads_with(path_value, &bin, fs);
+    let path = if leads { path_value.to_os_string() } else { prepend(&bin, path_value) };
+
+    if !resolves_to(&path, &python, fs) {
         return Err(VenvError(format!(
             "madoqua: {} exists but its python is not the one that would run\n  \
              expected: {}\n  \
@@ -125,7 +134,7 @@ pub fn plan(root: &Path, path_value: &OsStr, fs: &impl Fs) -> Result<Venv, VenvE
         )));
     }
 
-    Ok(Venv { auto_activated: true, env: ChildEnv { path: activated, virtual_env: Some(venv) } })
+    Ok(Venv { auto_activated: !leads, env: ChildEnv { path, virtual_env: venv } })
 }
 
 /// The guard against the real filesystem and the real `PATH`.
@@ -162,6 +171,17 @@ fn which(path_value: &OsStr, program: &str, fs: &impl Fs) -> Option<PathBuf> {
     std::env::split_paths(path_value)
         .map(|dir| dir.join(program))
         .find(|candidate| fs.is_executable(candidate))
+}
+
+/// Is `dir` already the first entry on `path_value`?
+///
+/// Canonicalised on both sides, so a repo reached through a symlinked root
+/// counts as leading rather than being prepended a second time under its real
+/// name — which, for a `PATH` that is already right, would be noise.
+fn leads_with(path_value: &OsStr, dir: &Path, fs: &impl Fs) -> bool {
+    std::env::split_paths(path_value)
+        .next()
+        .is_some_and(|first| first == dir || fs.canonical(&first) == fs.canonical(dir))
 }
 
 fn prepend(dir: &Path, path_value: &OsStr) -> OsString {
@@ -205,13 +225,58 @@ mod tests {
     const ROOT: &str = "/repo";
 
     #[test]
-    fn an_already_active_venv_is_left_alone() {
+    fn an_already_leading_venv_is_left_alone_but_still_exports_virtual_env() {
         let fs = FakeFs::new(&["/repo/.venv/bin/python"], &["/repo/.venv/bin/activate"]);
         let venv = plan(Path::new(ROOT), OsStr::new("/repo/.venv/bin:/usr/bin"), &fs).unwrap();
 
         assert!(!venv.auto_activated, "PATH was already right, so there is nothing to announce");
         assert_eq!(venv.env.path, OsString::from("/repo/.venv/bin:/usr/bin"), "PATH is untouched");
-        assert_eq!(venv.env.virtual_env, None, "we did not activate, so we set nothing");
+        assert_eq!(
+            venv.env.virtual_env,
+            PathBuf::from("/repo/.venv"),
+            "children are told which venv they are in, whatever the shell claims"
+        );
+    }
+
+    #[test]
+    fn a_tool_shadowed_by_an_earlier_directory_is_still_taken_from_the_venv() {
+        // The bug: `python` resolving to the venv says nothing about `pytest`.
+        // A directory earlier on PATH that holds one but not the other used to
+        // win, including for a tool a check spawns by name.
+        let fs = FakeFs::new(
+            &["/repo/.venv/bin/python", "/repo/.venv/bin/pytest", "/shadow/pytest"],
+            &["/repo/.venv/bin/activate"],
+        );
+        let venv =
+            plan(Path::new(ROOT), OsStr::new("/shadow:/repo/.venv/bin:/usr/bin"), &fs).unwrap();
+
+        assert_eq!(
+            which(&venv.env.path, "pytest", &fs),
+            Some(PathBuf::from("/repo/.venv/bin/pytest")),
+            "the venv's pytest is the one a child would find"
+        );
+        assert!(venv.auto_activated, "madoqua reordered PATH, and the verdict says so");
+        assert_eq!(
+            venv.env.path,
+            OsString::from("/repo/.venv/bin:/shadow:/repo/.venv/bin:/usr/bin"),
+            "the rest of PATH is preserved, in order, behind the venv"
+        );
+        assert_eq!(venv.env.virtual_env, PathBuf::from("/repo/.venv"));
+    }
+
+    #[test]
+    fn a_venv_further_back_on_path_is_pulled_to_the_front() {
+        let fs = FakeFs::new(
+            &["/repo/.venv/bin/python", "/usr/bin/ruff"],
+            &["/repo/.venv/bin/activate"],
+        );
+        let venv = plan(Path::new(ROOT), OsStr::new("/usr/bin:/repo/.venv/bin"), &fs).unwrap();
+
+        assert_eq!(
+            std::env::split_paths(&venv.env.path).next(),
+            Some(PathBuf::from("/repo/.venv/bin")),
+            "a venv that merely appears on PATH does not decide what runs"
+        );
     }
 
     #[test]
@@ -229,8 +294,8 @@ mod tests {
             ".venv/bin goes in front, and the rest of PATH is kept"
         );
         assert_eq!(
-            venv.env.virtual_env.as_deref(),
-            Some(Path::new("/repo/.venv")),
+            venv.env.virtual_env,
+            PathBuf::from("/repo/.venv"),
             "children see VIRTUAL_ENV, as they would after sourcing activate"
         );
     }

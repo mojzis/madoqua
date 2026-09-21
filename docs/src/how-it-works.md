@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart TD
-    guard[venv guard<br/>PATH must reach .venv/bin/python] -->|no venv| blocked[exit 1<br/>with instructions]
+    guard[venv guard<br/>.venv/bin first on PATH, VIRTUAL_ENV set] -->|no venv| blocked[exit 1<br/>with instructions]
     guard --> staged[git diff --cached<br/>*.py *.pyi]
     staged -->|nothing| quiet[exit 0<br/>no output]
     staged --> fix[fix phase<br/>sequential, writes]

@@ -416,3 +416,57 @@ fn tools_do_not_inherit_the_git_variables_that_point_at_the_hooks_repository() {
 
     common::assert_tool_git_stayed_in_its_own_repo(&repo, scratch.path());
 }
+
+#[test]
+fn a_check_resolves_its_own_tools_from_the_venv_even_when_an_earlier_entry_shadows_them() {
+    // The shell that runs the hook may be half-activated: `python` comes from
+    // the repo's venv, while a version manager's directory sits in front of it
+    // holding every other tool. What a check spawns by name has to come from
+    // the venv anyway.
+    let repo = Repo::new();
+    repo.tool("nested", "echo REPO_NESTED; exit 0");
+    repo.tool("probe", "exec nested");
+    common::write_executable(
+        &repo.path().join("shadow-bin/nested"),
+        "#!/bin/sh\necho GLOBAL_NESTED\nexit 99\n",
+    );
+    repo.write("pyproject.toml", "[tool.madoqua]\nfix = []\ncheck = [\"probe\"]\n");
+    repo.stage("a.py", "x = 1\n");
+
+    let mixed = format!(
+        "{}:{}:{}",
+        repo.path().join("shadow-bin").display(),
+        repo.path().join(".venv/bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let assert = repo.madoqua().arg("run").env("PATH", &mixed).assert();
+    let stderr = common::stderr(&assert);
+
+    assert_eq!(
+        assert.get_output().status.code(),
+        Some(0),
+        "the venv's `nested` is the one that runs; got: {stderr}"
+    );
+    assert!(!stderr.contains("GLOBAL_NESTED"), "the shadowing copy never ran, got: {stderr}");
+}
+
+#[test]
+fn every_tool_is_told_which_virtualenv_it_is_in() {
+    let repo = Repo::new();
+    repo.tool("report", r#"echo "seen VIRTUAL_ENV=$VIRTUAL_ENV"; exit 1"#);
+    repo.write("pyproject.toml", "[tool.madoqua]\nfix = []\ncheck = [\"report\"]\n");
+    repo.stage("a.py", "x = 1\n");
+
+    let assert = repo.madoqua().arg("run").env("VIRTUAL_ENV", "/nowhere/stale").assert().code(1);
+    let stderr = common::stderr(&assert);
+    let venv = std::fs::canonicalize(repo.path().join(".venv")).unwrap();
+
+    assert!(
+        stderr.contains(&format!("seen VIRTUAL_ENV={}", venv.display())),
+        "a tool asking which venv it is in gets this repo's, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("/nowhere/stale"),
+        "the shell's stale VIRTUAL_ENV is replaced, not inherited, got: {stderr}"
+    );
+}
