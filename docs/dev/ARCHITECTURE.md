@@ -42,8 +42,8 @@ somewhere convenient.
 
 `venv.rs` is the pattern in miniature. `plan(root, path_value, fs)` takes the
 current `PATH` as an `OsStr` and the filesystem as a trait object, so all four
-of its outcomes — already active, activated, no venv, shadowed — are unit tests
-that run on a machine with no Python at all. `guard(root)` is the three lines
+of its outcomes — already in front, moved in front, no venv, shadowed — are
+unit tests that run on a machine with no Python at all. `guard(root)` is the three lines
 that read the real `PATH` and hand it a `RealFs`.
 
 ## Tests

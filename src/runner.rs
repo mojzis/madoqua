@@ -295,9 +295,7 @@ fn tool_command(program: &str, root: &Path, env: &ChildEnv) -> Command {
     for var in GIT_REPOSITORY_VARS {
         command.env_remove(var);
     }
-    if let Some(virtual_env) = &env.virtual_env {
-        command.env("VIRTUAL_ENV", virtual_env);
-    }
+    command.env("VIRTUAL_ENV", &env.virtual_env);
     command
 }
 
@@ -379,10 +377,15 @@ fn truncate(output: &str, max: Option<usize>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn env() -> ChildEnv {
-        ChildEnv { path: std::env::var_os("PATH").unwrap_or_default(), virtual_env: None }
+        ChildEnv {
+            path: std::env::var_os("PATH").unwrap_or_default(),
+            virtual_env: PathBuf::from("/nonexistent/.venv"),
+        }
     }
 
     fn step(name: &str, argv: &[&str]) -> Step {

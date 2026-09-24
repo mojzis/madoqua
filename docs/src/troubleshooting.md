@@ -23,9 +23,22 @@ uv venv && uv sync
 
 ## The verdict says `(auto-activated .venv)` every time
 
-That is madoqua telling you your shell has not activated the venv — it worked
-around it for the hook's children, but everything else you type is using a
-different `python`. Activate it, or use `uv run`.
+That is madoqua telling you `.venv/bin` was not the front of your `PATH` — it
+worked around that for the hook's children, but everything else you type is
+using a different `python`. Activate the venv, or use `uv run`.
+
+It says the same thing when the venv *is* on `PATH` but something sits in front
+of it: a version manager's shim directory has no `python` of its own, so
+`python` still resolves into the venv while `pytest` comes from somewhere else.
+
+## A check ran a tool from outside the venv
+
+It should not be able to: `.venv/bin` goes to the front of the `PATH` every
+tool inherits, and `VIRTUAL_ENV` names the repo's venv, so a tool that a check
+spawns by name resolves there too. Older versions only rewrote `PATH` when
+`python` itself resolved elsewhere, which left a half-activated shell free to
+shadow everything else. If you still see it, check that the tool is installed
+in the venv at all — `.venv/bin/<tool> --version`.
 
 ## `…/.venv exists but its python is not the one that would run`
 

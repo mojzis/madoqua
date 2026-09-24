@@ -9,13 +9,18 @@ madoqua run
 
 ## What it does, in order
 
-1. **Virtualenv guard.** `python` must resolve to `<repo_root>/.venv/bin/python`.
-   If it does not and the venv exists, madoqua puts `.venv/bin` at the front of
-   the `PATH` its child processes get and sets `VIRTUAL_ENV` — the observable
-   half of `source .venv/bin/activate` — then checks again. If there is no
-   venv, or activating it does not win, the commit is blocked with instructions.
-   The guard runs before anything else, including the file list: a repo without
-   a venv is misconfigured whether or not this commit touches Python.
+1. **Virtualenv guard.** Every child process gets `<repo_root>/.venv/bin` at
+   the front of its `PATH` and `VIRTUAL_ENV` pointing at that venv — the
+   observable half of `source .venv/bin/activate`. That happens on every run,
+   not only when the venv is missing from `PATH`: where `python` resolves says
+   nothing about where `pytest` does, and a directory in front of the venv that
+   holds one but not the other would otherwise decide what a check, or a
+   process a check spawns by name, actually runs. The rest of `PATH` is kept,
+   in order, behind it. `python` then has to resolve to
+   `<repo_root>/.venv/bin/python`: if there is no venv, or something still
+   shadows it, the commit is blocked with instructions. The guard runs before
+   anything else, including the file list: a repo without a venv is
+   misconfigured whether or not this commit touches Python.
 2. **Staged files.** `git diff --cached --name-only -z --diff-filter=ACMR -- '*.py' '*.pyi'`.
    Nothing staged in Python means exit `0` with no output and no log entry.
 3. **Fix phase.** Sequentially, in configuration order. A fixer's non-zero exit
@@ -37,8 +42,9 @@ A clean run prints one line to **stdout**:
 pre-commit ok (3 py files, 1.8s, slowest: ty check 1.6s): ruff fix, ruff format applied & staged; ruff check, ty check passed
 ```
 
-with ` (auto-activated .venv)` after the parenthesis when the guard had to fix
-your `PATH` — which means your shell is not set up the way you think it is.
+with ` (auto-activated .venv)` after the parenthesis when `.venv/bin` was not
+already the front of your `PATH` and the guard put it there — which means your
+shell is not set up the way you think it is.
 
 A failing run prints nothing to stdout, and to **stderr** only the tools that
 failed:

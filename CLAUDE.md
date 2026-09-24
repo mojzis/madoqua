@@ -91,6 +91,14 @@ invariant the code no longer upholds is a bug in one of the two.
   onto the working tree. In a linked worktree the join is a path through a
   *file*: it fails with `Not a directory`, which is not `NotFound` and so is
   not forgiven, and the whole run dies with `2` before a check has started.
+- **The child environment is normalised on every run, not repaired on demand.**
+  `.venv/bin` goes to the front of the `PATH` every tool inherits, and
+  `VIRTUAL_ENV` names the repo's venv, whether or not `python` already resolved
+  there. Where `python` resolves is no evidence about where `pytest` does — a
+  directory in front of the venv holding one but not the other decided what a
+  check, and anything a check spawned by name, actually ran. The rest of `PATH`
+  is kept, in order, behind the venv: dropping entries would take tools away
+  from a check that can still legitimately reach them.
 - **Tools never see the hook's git location variables.** git exports
   `GIT_DIR`, `GIT_INDEX_FILE` and friends to hooks; a tool that inherits them
   and runs git in a temp repo (a test suite) rewrites the real repository
