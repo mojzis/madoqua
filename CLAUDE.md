@@ -7,9 +7,10 @@ code in this repository.
 
 `madoqua` is a git pre-commit hook for Python repos, ported from a bash script.
 It guards that the repo's `.venv` is what tools will run from, runs the fix
-commands over the staged `*.py`/`*.pyi` files sequentially, re-stages them, runs
-the check commands in parallel, and prints one line on success or the failing
-tools' output on failure. Every run appends a timing record to a JSONL log that
+commands sequentially over the staged files each one's `on` globs match
+(`*.py`/`*.pyi` by default), re-stages those, runs the check commands in
+parallel, and prints one line on success or the failing tools' output on
+failure. Every run appends a timing record to a JSONL log that
 `madoqua stats` summarises.
 
 It is a hybrid Rust/Python project: a Rust binary packaged as a Python wheel via
@@ -107,9 +108,13 @@ invariant the code no longer upholds is a bug in one of the two.
   A second way to spawn a tool is a bug.
 - **Logging is best-effort.** A failure to write the timing log warns on stderr
   and the commit proceeds. Nothing about timings may ever block a commit.
-- **A no-op run is not logged.** Runs with no staged Python files write
-  nothing, or they dominate the percentiles of any repo that also commits
-  prose.
+- **A no-op run is not logged.** Runs in which no step's `on` matched a staged
+  file write nothing, or they dominate the percentiles of any repo that also
+  commits prose.
+- **A step runs only on what its `on` matched, and only fixers' files are
+  re-staged.** A step that matched nothing is not run, logged or named in the
+  verdict. Re-adding a file only a check looked at would commit edits the
+  developer deliberately left unstaged.
 - **`main.rs` stays thin.** Argument parsing, tracing setup, exit-code mapping.
   Command bodies belong in `cli.rs`.
 - **Impurity lives in named seams.** Every process spawn, filesystem read and

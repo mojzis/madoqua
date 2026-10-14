@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use crate::cli::Outcome;
-use crate::config::{Config, Phase};
+use crate::config::{Config, Phase, Step};
 use crate::report::{RunRecord, StepRecord};
-use crate::runner::StepResult;
+use crate::runner::{Job, StepResult};
 use crate::{clock, git, runner, timelog, venv};
 
 /// Run the hook for the repository containing `start`.
@@ -41,32 +41,53 @@ pub fn run(start: &Path, out: &mut impl Write) -> Result<Outcome> {
         }
     };
 
-    let files = git::staged_python_files(&root)?;
-    if files.is_empty() {
+    let staged = git::staged_files(&root)?;
+    let fixes = jobs(&config.fix, &staged);
+    let checks = jobs(&config.check, &staged);
+    if fixes.is_empty() && checks.is_empty() {
         // Nothing to say, and nothing worth logging: an empty run would
         // dominate the percentiles of every repo that also commits prose.
         return Ok(Outcome::Clean);
     }
+    let file_count = covered(&staged, fixes.iter().chain(&checks)).len();
 
-    let mut steps = runner::run_fixes(&root, &config.fix, &files, &venv.env);
-    if !config.fix.is_empty() {
-        git::add(&root, &files).context("cannot re-stage the files the fixers rewrote")?;
-    }
+    // Only what a fixer ran on: re-adding a file nothing rewrote would stage
+    // edits the developer deliberately left out of this commit.
+    let rewritten = covered(&staged, &fixes);
+    let mut steps = runner::run_fixes(&root, &fixes, &venv.env);
+    git::add(&root, &rewritten).context("cannot re-stage the files the fixers rewrote")?;
 
-    steps.extend(runner::run_checks(&root, &config.check, &files, &venv.env));
+    steps.extend(runner::run_checks(&root, &checks, &venv.env));
 
     let total = started.elapsed();
-    write_log(&root, &git_dir, &config, &files, &steps, venv.auto_activated, total);
+    write_log(&root, &git_dir, &config, file_count, &steps, venv.auto_activated, total);
 
     let failures: Vec<&StepResult> = steps.iter().filter(|step| blocks(step)).collect();
 
     if failures.is_empty() {
-        writeln!(out, "{}", success_line(files.len(), total, &steps, venv.auto_activated))?;
+        writeln!(out, "{}", success_line(file_count, total, &steps, venv.auto_activated))?;
         Ok(Outcome::Clean)
     } else {
         eprint!("{}", failure_report(&failures));
         Ok(Outcome::FindingsReported)
     }
+}
+
+/// The steps that have something to run on, each with its share of the
+/// staged files. A step whose `on` matched nothing is left out entirely: it
+/// is not run, not logged and not named in the verdict.
+fn jobs<'a>(steps: &'a [Step], staged: &[String]) -> Vec<Job<'a>> {
+    steps
+        .iter()
+        .map(|step| Job { step, files: step.select(staged) })
+        .filter(|job| !job.files.is_empty())
+        .collect()
+}
+
+/// The staged files at least one of `jobs` runs on, in git's order.
+fn covered<'a>(staged: &[String], jobs: impl IntoIterator<Item = &'a Job<'a>>) -> Vec<String> {
+    let jobs: Vec<&Job<'_>> = jobs.into_iter().collect();
+    staged.iter().filter(|path| jobs.iter().any(|job| job.files.contains(path))).cloned().collect()
 }
 
 /// Whether a step is a reason to refuse the commit.
@@ -88,7 +109,7 @@ fn write_log(
     root: &Path,
     git_dir: &Path,
     config: &Config,
-    files: &[String],
+    files: usize,
     steps: &[StepResult],
     venv_auto_activated: bool,
     total: Duration,
@@ -98,7 +119,7 @@ fn write_log(
         ts: clock::format_rfc3339_utc(clock::now_unix()),
         repo: target.repo.clone(),
         head: git::head_short_sha(root).unwrap_or_default(),
-        files: files.len(),
+        files,
         total_ms: millis(total),
         venv_auto_activated,
         steps: steps.iter().map(step_record).collect(),
@@ -141,7 +162,7 @@ fn success_line(
     let slowest = steps.iter().max_by_key(|step| step.duration).map_or_else(String::new, |step| {
         format!(", slowest: {} {}", step.name, seconds(step.duration))
     });
-    let head = format!("{files} py files, {}{slowest}", seconds(total));
+    let head = format!("{files} files, {}{slowest}", seconds(total));
 
     let note = if venv_auto_activated { " (auto-activated .venv)" } else { "" };
 
@@ -229,7 +250,7 @@ mod tests {
         let line = success_line(3, Duration::from_millis(1834), &default_steps(), false);
         assert_eq!(
             line,
-            "pre-commit ok (3 py files, 1.8s, slowest: ty check 1.6s): \
+            "pre-commit ok (3 files, 1.8s, slowest: ty check 1.6s): \
              ruff fix, ruff format applied & staged; ruff check, ty check passed"
         );
         assert!(!line.contains('\n'), "a hook that prints a paragraph on success gets ignored");
@@ -249,7 +270,7 @@ mod tests {
         let checks = vec![step("ruff check", Phase::Check, 55, 0, "")];
         let line = success_line(1, Duration::from_millis(60), &checks, false);
         assert_eq!(
-            line, "pre-commit ok (1 py files, 0.1s, slowest: ruff check 0.1s): ruff check passed",
+            line, "pre-commit ok (1 files, 0.1s, slowest: ruff check 0.1s): ruff check passed",
             "an empty fix list means no `applied & staged` clause at all"
         );
     }

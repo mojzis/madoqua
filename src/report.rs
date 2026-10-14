@@ -20,7 +20,7 @@ pub struct RunRecord {
     /// Short sha of `HEAD`, the parent of the commit being made. Empty in a
     /// repository with no commits yet.
     pub head: String,
-    /// How many staged Python files the run saw.
+    /// How many staged files at least one step ran on.
     pub files: usize,
     /// Wall-clock time for the whole hook.
     pub total_ms: u64,

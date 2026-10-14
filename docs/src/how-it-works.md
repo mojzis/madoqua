@@ -5,11 +5,11 @@
 ```mermaid
 flowchart TD
     guard[venv guard<br/>.venv/bin first on PATH, VIRTUAL_ENV set] -->|no venv| blocked[exit 1<br/>with instructions]
-    guard --> staged[git diff --cached<br/>*.py *.pyi]
-    staged -->|nothing| quiet[exit 0<br/>no output]
+    guard --> staged[git diff --cached<br/>matched per step by its on globs]
+    staged -->|no step matched| quiet[exit 0<br/>no output]
     staged --> fix[fix phase<br/>sequential, writes]
     fix -->|a fixer that never ran| failures
-    fix --> add[git add<br/>the same file list]
+    fix --> add[git add<br/>the files the fixers ran on]
     add --> check[check phase<br/>parallel, read-only]
     check --> log[append one JSON line<br/>to the timing log]
     log -->|all pass| verdict[one line on stdout]

@@ -73,8 +73,10 @@ One JSON object per run, appended to
 - `timed_out: true` appears only on a step madoqua killed, which also carries
   `"exit": -1`.
 - `repo` appears only when the log lives outside the repository.
-- Runs with no staged Python files are not logged. They would otherwise
-  dominate the percentiles of any repo that also commits prose.
+- `files` counts the staged files at least one step ran on.
+- Runs in which no step's `on` matched a staged file are not logged. They
+  would otherwise dominate the percentiles of any repo that also commits
+  prose.
 
 ## Exit codes
 

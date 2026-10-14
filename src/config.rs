@@ -14,6 +14,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 
+use crate::pattern::Pattern;
+
 /// Which half of the run a step belongs to.
 ///
 /// The distinction is not cosmetic: fix steps write to the working tree and
@@ -49,6 +51,20 @@ pub struct Step {
     pub timeout: Option<Duration>,
     /// Keep at most this many lines of captured output. `None` means all of it.
     pub max_output_lines: Option<usize>,
+    /// The staged files that wake this step. Never empty.
+    pub on: Vec<Pattern>,
+}
+
+impl Step {
+    /// The staged files this step runs on, in the order git listed them. An
+    /// empty answer means the step does not run at all.
+    pub fn select(&self, staged: &[String]) -> Vec<String> {
+        staged
+            .iter()
+            .filter(|path| self.on.iter().any(|glob| glob.matches(path)))
+            .cloned()
+            .collect()
+    }
 }
 
 /// The resolved answer to "what runs, and where do timings go".
@@ -68,6 +84,16 @@ const DEFAULT_FIX: [(&str, &str); 2] =
 const DEFAULT_CHECK: [(&str, &str); 2] =
     [("ruff check", "ruff check --quiet --"), ("ty check", "ty check --")];
 
+/// What a step runs on when it does not say: the bash hook's pathspec.
+const DEFAULT_ON: [&str; 2] = ["*.py", "*.pyi"];
+
+/// [`DEFAULT_ON`], parsed. The globs are literals we control, so a parse
+/// failure here is a bug in this file, and dropping the glob is the answer
+/// that keeps `clippy::expect_used` quiet without hiding it from the tests.
+fn default_on() -> Vec<Pattern> {
+    DEFAULT_ON.iter().filter_map(|glob| Pattern::parse(glob).ok()).collect()
+}
+
 impl Default for Config {
     /// The zero-config behaviour: the bash hook's registry.
     fn default() -> Self {
@@ -86,6 +112,7 @@ fn builtin(table: &[(&str, &str)]) -> Vec<Step> {
             pass_files: true,
             timeout: None,
             max_output_lines: None,
+            on: default_on(),
         })
         .collect()
 }
@@ -191,6 +218,7 @@ struct StepTable {
     pass_files: Option<bool>,
     timeout_s: Option<u64>,
     max_output_lines: Option<usize>,
+    on: Option<Vec<String>>,
 }
 
 /// `pyproject.toml`'s nesting, so serde can reach `[tool.madoqua]`.
@@ -251,7 +279,26 @@ fn parse_step(spec: &StepSpec) -> Result<Step> {
         pass_files: table.and_then(|t| t.pass_files).unwrap_or(true),
         timeout: table.and_then(|t| t.timeout_s).map(Duration::from_secs),
         max_output_lines: table.and_then(|t| t.max_output_lines),
+        on: match table.and_then(|t| t.on.as_deref()) {
+            None => default_on(),
+            Some(globs) => {
+                parse_on(globs).with_context(|| format!("cannot use `on` for `{cmd}`"))?
+            }
+        },
     })
+}
+
+/// A step's `on` list. An empty one is refused rather than read as "never":
+/// a step that cannot run is a step someone meant to remove, and the overlay
+/// or `MADOQUA_SKIP` are the ways to stop one running.
+fn parse_on(globs: &[String]) -> Result<Vec<Pattern>> {
+    if globs.is_empty() {
+        bail!("an empty list would never run it; remove the step, or use MADOQUA_SKIP for one run");
+    }
+    globs
+        .iter()
+        .map(|glob| Pattern::parse(glob).with_context(|| format!("bad glob `{glob}`")))
+        .collect()
 }
 
 /// The name of a step written in string form: the leading words that are not
@@ -435,6 +482,7 @@ pub(crate) mod keys {
                 "pass_files",
                 "timeout_s",
                 "max_output_lines",
+                "on",
             ] {
                 assert!(
                     keys.contains(expected),
@@ -500,6 +548,7 @@ mod tests {
             pass_files: Some(false),
             timeout_s: Some(120),
             max_output_lines: Some(200),
+            on: None,
         }))
         .unwrap();
         assert_eq!(step.name, "ty", "an explicit name wins over the derived one");
@@ -717,6 +766,72 @@ mod tests {
             Config::default(),
             "no overlay is no overlay; the `.git` file next to the checkout is not one"
         );
+    }
+
+    fn staged(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|p| (*p).to_owned()).collect()
+    }
+
+    fn step_from(toml_text: &str) -> Result<Step> {
+        let spec: StepSpec = toml::from_str::<Layer>(&format!("check = [{toml_text}]\n"))
+            .map(|layer| layer.check.unwrap_or_default().into_iter().next())?
+            .ok_or_else(|| anyhow!("no step in `{toml_text}`"))?;
+        parse_step(&spec)
+    }
+
+    #[test]
+    fn every_step_runs_on_staged_python_unless_it_says_otherwise() {
+        let all = staged(&["README.md", "a.py", "uv.lock", "pkg/b.pyi"]);
+        for step in Config::default().fix.iter().chain(&Config::default().check) {
+            assert_eq!(
+                step.select(&all),
+                ["a.py", "pkg/b.pyi"],
+                "`{}` keeps the bash hook's `*.py` / `*.pyi`",
+                step.name
+            );
+        }
+        let string_form = step_from("\"bandit -q\"").unwrap();
+        assert_eq!(string_form.select(&all), ["a.py", "pkg/b.pyi"], "and so does a configured one");
+    }
+
+    #[test]
+    fn a_step_with_on_runs_on_what_its_globs_match_in_staged_order() {
+        let step =
+            step_from(r#"{ cmd = "gerenuk run", on = ["uv.lock", "*.py", "tests/**"] }"#).unwrap();
+        assert_eq!(
+            step.select(&staged(&["a.py", "README.md", "tests/data/x.json", "uv.lock"])),
+            ["a.py", "tests/data/x.json", "uv.lock"],
+            "any glob matching is enough, and git's order is kept"
+        );
+        assert_eq!(
+            step.select(&staged(&["README.md", "docs/x.md"])),
+            [] as [&str; 0],
+            "nothing matching means the step has nothing to do"
+        );
+    }
+
+    #[test]
+    fn on_replaces_the_default_rather_than_adding_to_it() {
+        let step = step_from(r#"{ cmd = "lockcheck", on = ["uv.lock"] }"#).unwrap();
+        assert_eq!(
+            step.select(&staged(&["a.py", "uv.lock"])),
+            ["uv.lock"],
+            "a step that lists its files gets those files and not Python as well"
+        );
+    }
+
+    #[test]
+    fn an_empty_on_list_is_refused() {
+        let err = format!("{:#}", step_from(r#"{ cmd = "never", on = [] }"#).unwrap_err());
+        assert!(err.contains("never"), "the error names the command, got: {err}");
+        assert!(err.contains("MADOQUA_SKIP"), "and says what to use instead, got: {err}");
+    }
+
+    #[test]
+    fn a_bad_glob_names_the_command_and_the_glob() {
+        let err = format!("{:#}", step_from(r#"{ cmd = "lint", on = ["tests/"] }"#).unwrap_err());
+        assert!(err.contains("lint"), "must name the command, got: {err}");
+        assert!(err.contains("tests/"), "must name the glob, got: {err}");
     }
 
     #[test]

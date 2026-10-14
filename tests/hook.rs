@@ -25,7 +25,7 @@ fn a_clean_run_says_one_line_restages_the_fixes_and_logs_the_timings() {
     let assert = repo.madoqua().arg("run").assert().success();
     let line = common::only_line(&assert.get_output().stdout);
 
-    assert!(line.starts_with("pre-commit ok (1 py files, "), "got: {line}");
+    assert!(line.starts_with("pre-commit ok (1 files, "), "got: {line}");
     assert!(line.contains("slowest: "), "the verdict carries timings, got: {line}");
     assert!(
         line.contains("(auto-activated .venv)"),
@@ -96,6 +96,104 @@ fn nothing_staged_in_python_means_nothing_at_all() {
         !repo.log_exists(),
         "a no-op run would otherwise dominate the percentiles of a repo that also commits prose"
     );
+}
+
+#[test]
+fn a_step_on_the_lockfile_runs_when_only_the_lockfile_changed() {
+    let repo = wired();
+    repo.write(
+        "pyproject.toml",
+        "[tool.madoqua]\nfix = [\"fakefix\"]\n\
+         check = [\"fakecheck\", { name = \"tests\", cmd = \"fakecheck\", pass_files = false, \
+         on = [\"*.py\", \"uv.lock\"] }]\n",
+    );
+    repo.stage("uv.lock", "version = 1\n");
+
+    let assert = repo.madoqua().arg("run").assert().success();
+    let line = common::only_line(&assert.get_output().stdout);
+    assert!(line.starts_with("pre-commit ok (1 files, "), "got: {line}");
+    assert!(
+        line.ends_with("): tests passed"),
+        "only the step whose `on` matched ran; the Python steps had nothing to do, got: {line}"
+    );
+    assert_eq!(
+        repo.staged_content("uv.lock"),
+        "version = 1\n",
+        "a fixer that runs on Python never touched the lockfile"
+    );
+
+    let records = repo.log_records();
+    assert_eq!(records.len(), 1, "a run that ran a step is logged");
+    assert_eq!(records[0]["files"], 1);
+    assert_eq!(
+        records[0]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| step["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["tests"],
+        "a step that did not run is not logged as if it had"
+    );
+}
+
+#[test]
+fn each_step_is_handed_only_the_staged_files_its_globs_match() {
+    let repo = wired();
+    repo.tool("echoargs", r#"echo "$@"; exit 1"#);
+    repo.write(
+        "pyproject.toml",
+        "[tool.madoqua]\nfix = []\ncheck = [\
+         { name = \"py\", cmd = \"echoargs\" }, \
+         { name = \"lock\", cmd = \"echoargs\", on = [\"uv.lock\"] }]\n",
+    );
+    repo.stage("a.py", "x = 1\n");
+    repo.stage("uv.lock", "version = 1\n");
+    repo.stage("README.md", "# hi\n");
+
+    let assert = repo.madoqua().arg("run").assert().code(1);
+    assert_eq!(
+        common::stderr(&assert),
+        "== py failed ==\na.py\n== lock failed ==\nuv.lock\n",
+        "a Python tool never sees the lockfile, and the lockfile's step never sees Python"
+    );
+}
+
+#[test]
+fn only_the_files_a_fixer_ran_on_are_restaged() {
+    let repo = wired();
+    repo.write(
+        "pyproject.toml",
+        "[tool.madoqua]\nfix = [\"fakefix\"]\n\
+         check = [{ name = \"docs\", cmd = \"fakecheck\", on = [\"*.md\"] }]\n",
+    );
+    repo.stage("a.py", "x = 1\n");
+    repo.stage("notes.md", "staged\n");
+    repo.write("notes.md", "staged\nnot staged\n");
+
+    let assert = repo.madoqua().arg("run").assert().success();
+    let line = common::only_line(&assert.get_output().stdout);
+    assert!(line.starts_with("pre-commit ok (2 files, "), "both files had a step, got: {line}");
+    assert_eq!(
+        repo.staged_content("notes.md"),
+        "staged\n",
+        "a file only a check looked at is not re-staged, or its unstaged edits get committed"
+    );
+    assert_eq!(repo.staged_content("a.py"), "x = 1\n# fixed\n", "the fixer's file still is");
+}
+
+#[test]
+fn a_bad_on_glob_is_a_run_that_could_not_complete() {
+    let repo = wired();
+    repo.write(
+        "pyproject.toml",
+        "[tool.madoqua]\ncheck = [{ cmd = \"fakecheck\", on = [\"tests/\"] }]\n",
+    );
+    repo.stage("a.py", "x = 1\n");
+
+    let assert = repo.madoqua().arg("run").assert().code(2);
+    let stderr = common::stderr(&assert);
+    assert!(stderr.contains("tests/**"), "the error says what to write instead, got: {stderr}");
 }
 
 #[test]
