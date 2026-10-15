@@ -7,7 +7,7 @@ about it. Small, fast, silent until there's something to say.
 A clean commit prints exactly this and nothing else:
 
 ```
-pre-commit ok (3 py files, 1.8s, slowest: ty check 1.6s): ruff fix, ruff format applied & staged; ruff check, ty check passed
+pre-commit ok (3 files, 1.8s, slowest: ty check 1.6s): ruff fix, ruff format applied & staged; ruff check, ty check passed
 ```
 
 A commit with a problem prints only the tool that had one, and stops the

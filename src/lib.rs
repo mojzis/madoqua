@@ -9,7 +9,7 @@
 //! log file, [`clock`] is the wall clock, [`config`] is everywhere the
 //! configuration is written down, [`install`] writes the shim, and
 //! [`guide`] reads a directory to see whether madoqua is wired into it.
-//! [`stats`] and [`report`] touch nothing at all.
+//! [`stats`], [`report`] and [`pattern`] touch nothing at all.
 //!
 //! See `docs/dev/ARCHITECTURE.md`, and `docs/adr/` for why the shape is what
 //! it is.
@@ -21,6 +21,7 @@ pub mod git;
 pub mod guide;
 pub mod hook;
 pub mod install;
+pub mod pattern;
 pub mod report;
 pub mod runner;
 pub mod stats;

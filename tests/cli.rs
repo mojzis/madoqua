@@ -66,7 +66,7 @@ fn root_runs_against_another_repository_and_walks_up_to_its_root() {
         .success();
 
     assert!(
-        common::only_line(&assert.get_output().stdout).starts_with("pre-commit ok (1 py files"),
+        common::only_line(&assert.get_output().stdout).starts_with("pre-commit ok (1 files"),
         "got: {}",
         common::stdout(&assert)
     );
@@ -152,7 +152,7 @@ fn an_installed_hook_runs_on_a_real_commit_and_logs_it() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(seen.contains("pre-commit ok (1 py files"), "the commit said nothing: {seen}");
+    assert!(seen.contains("pre-commit ok (1 files"), "the commit said nothing: {seen}");
     assert_eq!(
         repo.git(&["show", "HEAD:a.py"]),
         "x = 1\n# fixed\n",

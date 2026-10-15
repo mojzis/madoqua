@@ -108,39 +108,44 @@ impl StepResult {
     }
 }
 
+/// A step that is going to run, and the staged files it runs on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Job<'a> {
+    /// What to run.
+    pub step: &'a Step,
+    /// The staged files its `on` matched. Never empty: a step with nothing to
+    /// run on is not a job.
+    pub files: Vec<String>,
+}
+
 /// Run the fix phase in order.
 ///
 /// A fixer's non-zero exit is deliberately not fatal: `ruff check --fix` exits
 /// non-zero for the violations it could not fix, and those are exactly what
 /// the check phase is about to report.
-pub fn run_fixes(root: &Path, steps: &[Step], files: &[String], env: &ChildEnv) -> Vec<StepResult> {
-    steps.iter().map(|step| run_step(root, step, files, env, Phase::Fix)).collect()
+pub fn run_fixes(root: &Path, jobs: &[Job<'_>], env: &ChildEnv) -> Vec<StepResult> {
+    jobs.iter().map(|job| run_step(root, job.step, &job.files, env, Phase::Fix)).collect()
 }
 
 /// Run every check at once and return the results in configuration order, so
 /// the verdict does not reorder itself run to run.
-pub fn run_checks(
-    root: &Path,
-    steps: &[Step],
-    files: &[String],
-    env: &ChildEnv,
-) -> Vec<StepResult> {
+pub fn run_checks(root: &Path, jobs: &[Job<'_>], env: &ChildEnv) -> Vec<StepResult> {
     thread::scope(|scope| {
         #[expect(
             clippy::needless_collect,
             reason = "every check has to be spawned before any of them is joined, or \
                       the phase runs sequentially"
         )]
-        let handles: Vec<_> = steps
+        let handles: Vec<_> = jobs
             .iter()
-            .map(|step| scope.spawn(move || run_step(root, step, files, env, Phase::Check)))
+            .map(|job| scope.spawn(move || run_step(root, job.step, &job.files, env, Phase::Check)))
             .collect();
 
         handles
             .into_iter()
-            .zip(steps)
-            .map(|(handle, step)| {
-                handle.join().unwrap_or_else(|payload| panicked(step, payload.as_ref()))
+            .zip(jobs)
+            .map(|(handle, job)| {
+                handle.join().unwrap_or_else(|payload| panicked(job.step, payload.as_ref()))
             })
             .collect()
     })
@@ -395,7 +400,12 @@ mod tests {
             pass_files: true,
             timeout: None,
             max_output_lines: None,
+            on: Vec::new(),
         }
+    }
+
+    fn jobs(steps: &[Step]) -> Vec<Job<'_>> {
+        steps.iter().map(|step| Job { step, files: Vec::new() }).collect()
     }
 
     #[test]
@@ -556,7 +566,7 @@ mod tests {
         let steps = [step("slow", &["sh", "-c", "sleep 0.3"]), step("fast", &["sh", "-c", "true"])];
 
         let started = Instant::now();
-        let results = run_checks(dir.path(), &steps, &[], &env());
+        let results = run_checks(dir.path(), &jobs(&steps), &env());
         let elapsed = started.elapsed();
 
         assert_eq!(
@@ -578,7 +588,7 @@ mod tests {
             step("second", &["sh", "-c", "echo two >> log.txt"]),
         ];
 
-        let results = run_fixes(dir.path(), &steps, &[], &env());
+        let results = run_fixes(dir.path(), &jobs(&steps), &env());
         assert_eq!(results[0].exit, 1, "the first fixer failed");
         assert_eq!(
             std::fs::read_to_string(dir.path().join("log.txt")).unwrap(),

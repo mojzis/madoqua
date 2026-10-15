@@ -26,31 +26,31 @@ check = [
 |---|---|---|
 | `cmd` | - | The command line. Required in table form. |
 | `name` | leading non-flag words of `cmd` | What the verdict, the log and `MADOQUA_SKIP` call this step. |
-| `pass_files` | true | Append the staged file list. Set it false for tools that scope themselves. |
+| `on` | `["*.py", "*.pyi"]` | Globs for the staged files that wake this step. Replaces the default. |
+| `pass_files` | true | Append the files `on` matched. Set it false for tools that scope themselves. |
 | `timeout_s` | none | Kill the step after this many seconds. A killed step fails the commit. |
 | `max_output_lines` | none | Keep this many lines of a failure and truncate the rest. This is the knob for fitting a failure into an agent's context window. |
 
-**The file list** is the staged `.py` and `.pyi` files, relative to the
-repository root, appended after the command's own arguments, so the string
-form `ruff check --quiet` runs as `ruff check --quiet a.py pkg/b.py`. With no
-staged Python file there is no run at all - no step, no log row, exit `0`.
-Commands are split on whitespace with quotes honoured and run without a shell,
-so a pipe, a semicolon or `&&` is refused; put the pipeline in a script.
+**`on` and the file list.** A step runs only if a staged file matches its
+`on`, and gets those files after its arguments: `ruff check --quiet a.py`.
+Globs as in .gitignore: no `/` matches the name at any depth, `*` stays in one
+directory, `**` spans many. With no match anywhere there is no run at all - no
+output, no log row, exit `0`. No shell: `|`, `;` and `&&` are refused.
 
-**Siblings**, in the same table form; gerenuk computes its own diff:
+**Siblings**; gerenuk does its own diff, so `on` wakes it for what moves tests:
 
 ```toml
 [tool.madoqua]
 extend_check = [
   { name = "biston", cmd = "biston scan --focus-args" },
   { name = "zorilla", cmd = "zorilla check" },
-  { name = "gerenuk", cmd = "gerenuk run -- -q", pass_files = false, timeout_s = 120 },
+  { name = "gerenuk", cmd = "gerenuk run -- -q", pass_files = false,
+    on = ["*.py", "uv.lock", "pyproject.toml"], timeout_s = 120 },
 ]
 ```
 
-**Phases.** Fix steps run sequentially and are re-staged; a non-zero exit is
-not fatal, the check that follows reports it, but a fixer that could not start
-is. Check steps run in parallel, are read-only, and a non-zero exit blocks.
+**Phases.** Fixers run in order, only their files are re-staged, and only a
+fixer that could not start blocks. Checks run in parallel; non-zero blocks.
 
 **Skipping.** `MADOQUA_SKIP="ty check"` drops checks by exact name for one
 run, and never touches the fix phase. `log` defaults to `hook-timings.jsonl` in

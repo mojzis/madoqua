@@ -5,7 +5,7 @@ checks in parallel, say one line. Small, fast, silent until there's something
 to say.
 
 ```
-pre-commit ok (3 py files, 1.8s, slowest: ty check 1.6s): ruff fix, ruff format applied & staged; ruff check, ty check passed
+pre-commit ok (3 files, 1.8s, slowest: ty check 1.6s): ruff fix, ruff format applied & staged; ruff check, ty check passed
 ```
 
 That is the entire output of a clean commit. A commit with a problem prints

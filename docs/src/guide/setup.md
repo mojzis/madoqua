@@ -45,8 +45,8 @@ extend_check = ["bandit -q -r src"]
 `madoqua guide tune` is the full key reference, including how a sibling tool
 such as biston, zorilla or gerenuk is wired in as one more check.
 
-**6. Verify that it runs.** madoqua acts only on staged `.py` and `.pyi`
-files. With none staged it prints nothing, exits `0` and writes no log row, so
+**6. Verify that it runs.** By default madoqua acts only on staged `.py` and
+`.pyi` files. With none staged it prints nothing, exits `0` and writes no log row, so
 silence is not a verdict. Make a one-line edit to any `.py` file, `git add` it,
 and commit - git runs hooks with the login `PATH`, not the shell's, so only a
 real commit proves the shim finds the binary. A run that happened ends with

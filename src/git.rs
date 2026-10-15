@@ -8,10 +8,6 @@ use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
 
-/// The extensions the hook considers its business, matching the bash version's
-/// pathspec exactly.
-const PY_PATHSPECS: [&str; 2] = ["*.py", "*.pyi"];
-
 /// The working tree root of the repository containing `start`.
 pub fn repo_root(start: &Path) -> Result<PathBuf> {
     let output = run(start, &["rev-parse", "--show-toplevel"])?;
@@ -45,16 +41,15 @@ pub fn common_dir(root: &Path) -> Result<PathBuf> {
     Ok(root.join(line))
 }
 
-/// The staged Python files, relative to the repository root.
+/// Every staged file, relative to the repository root, in git's order.
 ///
+/// All of them, not just Python: which ones a step runs on is the step's `on`
+/// list, decided downstream over this list rather than by a pathspec here.
 /// `--diff-filter=ACMR` skips deletions — running a formatter on a path that
 /// is no longer there would fail for an uninteresting reason — and `-z` keeps
 /// paths with spaces or newlines in them intact.
-pub fn staged_python_files(root: &Path) -> Result<Vec<String>> {
-    let mut args = vec!["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR", "--"];
-    args.extend(PY_PATHSPECS);
-
-    let output = run(root, &args)?;
+pub fn staged_files(root: &Path) -> Result<Vec<String>> {
+    let output = run(root, &["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"])?;
     Ok(String::from_utf8_lossy(&output.stdout)
         .split('\0')
         .filter(|path| !path.is_empty())

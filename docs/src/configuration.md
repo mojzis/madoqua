@@ -29,9 +29,43 @@ An entry is either a command line or a table:
 |---|---|---|
 | `cmd` | — | The command line. Required in table form. |
 | `name` | the leading non-flag words of `cmd` | What the verdict, the log and `MADOQUA_SKIP` call this step. |
-| `pass_files` | `true` | Append the staged file list to the command. `false` for repo-wide tools. |
+| `on` | `["*.py", "*.pyi"]` | Globs for the staged files that wake this step. A list replaces the default rather than adding to it. |
+| `pass_files` | `true` | Append the staged files `on` matched to the command. `false` for repo-wide tools. |
 | `timeout_s` | none | Kill the step after this long. A killed step fails the commit and is logged with `"exit": -1, "timed_out": true`. |
 | `max_output_lines` | none | Keep this many lines of output and replace the rest with `... (N lines truncated)`. This is the knob for keeping a failure inside an agent's context window. |
+
+## Which files wake a step: `on`
+
+A step runs only when at least one staged file matches its `on` list, and with
+`pass_files` it is handed exactly those files. A step that matches nothing is
+not run, not logged and not named in the verdict; a commit in which no step
+matches anything prints nothing and writes no log row.
+
+The globs follow `.gitignore`, minus everything but the wildcards:
+
+| Glob | Matches |
+|---|---|
+| `*.py` | No `/`: a file name at any depth — `a.py`, `pkg/sub/a.py`. |
+| `uv.lock` | Likewise any `uv.lock`; write `/uv.lock` for the root one only. |
+| `tests/*.py` | Has a `/`: anchored at the root, and `*` stays in one directory. |
+| `tests/**` | `**` as a whole segment spans any depth: everything under `tests`. |
+
+`?` is one character. Nothing else is special. A trailing `/` and an empty
+list are refused rather than read as "never".
+
+This is how a test runner that works out its own diff is woken by more than
+Python, without being handed files it would not know what to do with:
+
+```toml
+[tool.madoqua]
+extend_check = [
+  { name = "gerenuk", cmd = "gerenuk run -- -q", pass_files = false,
+    on = ["*.py", "uv.lock", "pyproject.toml", "tests/**"], timeout_s = 120 },
+]
+```
+
+Only the files a *fixer* ran on are re-staged. A file that only a check looked
+at keeps whatever you staged of it.
 
 Command lines are split on whitespace with single and double quotes honoured.
 There is no shell: `|`, `;` and `&&` are rejected with an error rather than
