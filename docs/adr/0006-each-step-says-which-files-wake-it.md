@@ -2,6 +2,9 @@
 
 Status: accepted
 
+Amended by [0007](0007-a-whole-repo-run-from-the-same-list.md): `madoqua check`
+matches `on` against every file in the repository instead of the staged ones.
+
 ## Decision
 
 A step's table form takes an `on` list of globs. A step runs only if a staged

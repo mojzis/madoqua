@@ -10,8 +10,9 @@ It guards that the repo's `.venv` is what tools will run from, runs the fix
 commands sequentially over the staged files each one's `on` globs match
 (`*.py`/`*.pyi` by default), re-stages those, runs the check commands in
 parallel, and prints one line on success or the failing tools' output on
-failure. Every run appends a timing record to a JSONL log that
-`madoqua stats` summarises.
+failure. Every hook run appends a timing record to a JSONL log that
+`madoqua stats` summarises. `madoqua check` runs the same checks over every
+file in the repository instead, fixing, staging and logging nothing.
 
 It is a hybrid Rust/Python project: a Rust binary packaged as a Python wheel via
 maturin and published to PyPI.
@@ -106,6 +107,15 @@ invariant the code no longer upholds is a bug in one of the two.
   instead. Every tool is built by `runner::tool_command`, which removes
   `GIT_REPOSITORY_VARS`; madoqua's own calls in `git.rs` keep the environment.
   A second way to spawn a tool is a bug.
+- **`madoqua check` is the hook's checks over the whole repository, and
+  nothing more.** Same list, guard, verdict and exit codes; no fix phase, no
+  staging, no log row (ADR 0007). What differs between the two runs is said on
+  the step (`when`, `full_cmd`), never in a second list that would drift from
+  the first. Those keys and `blocking` are check keys, and on a fixer they are
+  an error rather than silently ignored.
+- **An advisory check never blocks, and never reads as passed.** A failing
+  `blocking = false` check prints on stderr under `(advisory)` and is named as
+  `failed (advisory)` in the one-line verdict.
 - **Logging is best-effort.** A failure to write the timing log warns on stderr
   and the commit proceeds. Nothing about timings may ever block a commit.
 - **A no-op run is not logged.** Runs in which no step's `on` matched a staged

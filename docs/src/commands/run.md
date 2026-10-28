@@ -36,7 +36,8 @@ madoqua run
    gets committed. A file only a check looked at is not re-added: that would
    stage edits you deliberately left out.
 5. **Check phase.** Every matched check at once, on its own thread, with
-   stdout and stderr captured per check.
+   stdout and stderr captured per check. Checks with `when = "full"` are left
+   to [`check`](check.md).
 6. **One line, or the failures.**
 
 ## Output
@@ -59,6 +60,10 @@ failed:
 src/a.py:12: error: Argument 1 has incompatible type "int"
 ```
 
+A check with `blocking = false` that fails does not block the commit. Its
+output goes to stderr under `== name failed (advisory) ==`, and the verdict
+ends `name failed (advisory)` instead of counting it as passed.
+
 Everything informational goes to stderr, so `madoqua run` stays pipeable.
 
 ## Configuration
@@ -70,6 +75,6 @@ overlay semantics in short form.
 
 | Code | When |
 |---|---|
-| `0` | Every check passed, or no step matched anything staged |
-| `1` | A check failed or timed out, a fixer could not be run, or the virtualenv guard refused |
+| `0` | Every blocking check passed (a failed advisory check is reported), or no step matched anything staged |
+| `1` | A blocking check failed or timed out, a fixer could not be run, or the virtualenv guard refused |
 | `2` | madoqua could not run: not a repository, unreadable config, a command it cannot honour |

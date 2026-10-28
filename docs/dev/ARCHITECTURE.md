@@ -9,12 +9,12 @@ How the crate is put together. For *why*, and what each choice cost, see
 |---|---|---|
 | `main.rs` | Parse arguments, set up tracing, map `Outcome` to an exit code. Nothing else. | |
 | `cli.rs` | The `clap` definitions and the body of every command. | |
-| `hook.rs` | The pipeline — which steps have anything to run on, what gets re-staged — and the wording of the verdict. | |
-| `config.rs` | What to run: `[tool.madoqua]`, the `hooks.local.toml` overlay in the git directory, `MADOQUA_SKIP`, the merge rules, command splitting, and which staged files each step runs on (`Step::select`). | reads two files and one variable |
+| `hook.rs` | The two pipelines — the hook, and the whole-repo `check` — which steps have anything to run on, what gets re-staged, and the wording of the verdict. | |
+| `config.rs` | What to run: `[tool.madoqua]`, the `hooks.local.toml` overlay in the git directory, `MADOQUA_SKIP`, the merge rules, command splitting, which files each step runs on (`Step::select`), and what each run runs (`Config::for_mode`: `when`, `full_cmd`, no fixers in the full run). | reads two files and one variable |
 | `pattern.rs` | The `.gitignore`-style globs a step's `on` is written in. Pure. | |
 | `stats.rs` | Percentiles and the table. Pure. | |
 | `report.rs` | The JSON wire formats — the log record and `stats --json`. Field names here are public contract. | |
-| `git.rs` | **Every** `git` invocation in the crate, including *where* the repository is: the working tree root and the git directory the overlay and the log live in. It reports every staged file; it does not decide which ones matter. | yes |
+| `git.rs` | **Every** `git` invocation in the crate, including *where* the repository is: the working tree root and the git directory the overlay and the log live in. It reports every staged file, or for `check` every file a commit could contain; it does not decide which ones matter. | yes |
 | `runner.rs` | **Every other** process spawn: fix sequentially, checks in parallel, timeouts, output capture and truncation. Every tool is built by `tool_command`, which strips the variables that pin git to a repository (`GIT_DIR`, `GIT_INDEX_FILE`, …). | yes |
 | `venv.rs` | The virtualenv guard and the `PATH` children inherit. `plan` is pure; `guard` is the one-line impure wrapper. | yes |
 | `timelog.rs` | Resolving the log path (`~`, in-repo or not) and appending to it. | yes |

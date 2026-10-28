@@ -31,8 +31,16 @@ An entry is either a command line or a table:
 | `name` | the leading non-flag words of `cmd` | What the verdict, the log and `MADOQUA_SKIP` call this step. |
 | `on` | `["*.py", "*.pyi"]` | Globs for the staged files that wake this step. A list replaces the default rather than adding to it. |
 | `pass_files` | `true` | Append the staged files `on` matched to the command. `false` for repo-wide tools. |
-| `timeout_s` | none | Kill the step after this long. A killed step fails the commit and is logged with `"exit": -1, "timed_out": true`. |
+| `timeout_s` | none | Kill the step after this long. A killed step fails the run, unless it is `blocking = false`, and is logged with `"exit": -1, "timed_out": true`. |
 | `max_output_lines` | none | Keep this many lines of output and replace the rest with `... (N lines truncated)`. This is the knob for keeping a failure inside an agent's context window. |
+| `when` | `"always"` | Checks only. `"commit"` runs it only in the hook, `"full"` only in [`madoqua check`](commands/check.md). |
+| `full_cmd` | `cmd` | Checks only. What `madoqua check` runs instead of `cmd`, handed no file list. |
+| `blocking` | `true` | Checks only. `false` reports a failure — on stderr, and as `failed (advisory)` in the verdict — but never fails the run. |
+
+`when`, `full_cmd` and `blocking` on a fixer are refused with an error: fixers
+run only in the hook, and a fixer's failure never blocks anyway. So is
+`full_cmd` on a step with `when = "commit"` or `"full"`: one of its two
+commands would never run.
 
 ## Which files wake a step: `on`
 
@@ -64,6 +72,9 @@ extend_check = [
 ]
 ```
 
+In [`madoqua check`](commands/check.md) the same globs are matched against
+every file in the repository instead of the staged ones.
+
 Only the files a *fixer* ran on are re-staged. A file that only a check looked
 at keeps whatever you staged of it.
 
@@ -71,6 +82,24 @@ Command lines are split on whitespace with single and double quotes honoured.
 There is no shell: `|`, `;` and `&&` are rejected with an error rather than
 being passed along as literal arguments. Put a pipeline in a script and call
 the script.
+
+## The hook and the whole-repo run
+
+`madoqua run` (the hook) and `madoqua check` (the whole repository) run from
+the same list. A check runs the same command in both unless it says otherwise:
+
+```toml
+[tool.madoqua]
+extend_check = [
+  # The staged files at commit, the whole tree in `madoqua check`.
+  { name = "biston", cmd = "biston scan --focus-args", full_cmd = "biston scan ." },
+  # Too slow for every commit.
+  { name = "pytest", cmd = "pytest -q", pass_files = false, when = "full" },
+  # Worth reading, not worth failing over.
+  { name = "pysentry", cmd = "pysentry-rs .", pass_files = false, when = "full",
+    blocking = false },
+]
+```
 
 ## The personal overlay
 

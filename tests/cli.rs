@@ -11,7 +11,7 @@ fn help_lists_the_commands() {
     let assert = common::madoqua(dir.path()).arg("--help").assert().success();
     let stdout = common::stdout(&assert);
 
-    for command in ["run", "install", "stats", "guide"] {
+    for command in ["run", "check", "install", "stats", "guide"] {
         assert!(stdout.contains(command), "`{command}` is missing from --help:\n{stdout}");
     }
 }

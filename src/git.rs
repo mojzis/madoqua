@@ -3,6 +3,7 @@
 //! Every `git` invocation in the crate is in this file. Callers get parsed
 //! data — a path, a list of paths, a short sha — and never a `Command`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -50,11 +51,48 @@ pub fn common_dir(root: &Path) -> Result<PathBuf> {
 /// paths with spaces or newlines in them intact.
 pub fn staged_files(root: &Path) -> Result<Vec<String>> {
     let output = run(root, &["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"])?;
-    Ok(String::from_utf8_lossy(&output.stdout)
+    Ok(nul_separated(&output))
+}
+
+/// Every file a commit could contain, relative to the repository root: the
+/// tracked files and the untracked ones git does not ignore, minus those not
+/// on disk, sorted by path.
+///
+/// This is the whole-repo run's answer to [`staged_files`]. Untracked files
+/// are in it because `ruff check .` would see them, and a new module is
+/// exactly the file nobody has staged yet. Files deleted from the working
+/// tree, and files a sparse checkout left out of it, are not: a tool handed a
+/// path that is not there fails for an uninteresting reason, which is why
+/// `--diff-filter=ACMR` leaves deletions out of the staged list too.
+pub fn repo_files(root: &Path) -> Result<Vec<String>> {
+    // `-t` tags each path; `S` is skip-worktree, which is how a sparse
+    // checkout marks a tracked file it did not write, and which `--deleted`
+    // does not report.
+    let listed =
+        run(root, &["ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard"])?;
+    let deleted = run(root, &["ls-files", "-z", "--deleted"])?;
+    let deleted: HashSet<String> = nul_separated(&deleted).into_iter().collect();
+
+    let mut files: Vec<String> = nul_separated(&listed)
+        .into_iter()
+        .filter_map(|entry| match entry.split_once(' ') {
+            Some(("S", _)) | None => None,
+            Some((_, path)) => Some(path.to_owned()),
+        })
+        .collect();
+    files.sort_unstable();
+    // A conflicted path is listed once per stage it has.
+    files.dedup();
+    files.retain(|path| !deleted.contains(path));
+    Ok(files)
+}
+
+fn nul_separated(output: &Output) -> Vec<String> {
+    String::from_utf8_lossy(&output.stdout)
         .split('\0')
         .filter(|path| !path.is_empty())
         .map(ToOwned::to_owned)
-        .collect())
+        .collect()
 }
 
 /// Re-stage the files the fix phase may have rewritten.

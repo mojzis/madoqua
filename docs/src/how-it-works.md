@@ -12,9 +12,31 @@ flowchart TD
     fix --> add[git add<br/>the files the fixers ran on]
     add --> check[check phase<br/>parallel, read-only]
     check --> log[append one JSON line<br/>to the timing log]
-    log -->|all pass| verdict[one line on stdout]
-    log -->|any fails| failures[failing tools' output<br/>on stderr, exit 1]
+    log -->|no blocking check failed| verdict[one line on stdout]
+    log -->|a blocking check failed| failures[failing tools' output<br/>on stderr, exit 1]
 ```
+
+A check with `blocking = false` that fails does not take the second branch:
+its output goes to stderr marked `(advisory)`, and the verdict still prints.
+
+## The whole-repo run
+
+`madoqua check` is the same pipeline with the commit-specific parts taken
+out:
+
+```mermaid
+flowchart TD
+    guard[venv guard] -->|no venv| blocked[exit 1<br/>with instructions]
+    guard --> files[git ls-files<br/>tracked + untracked, not ignored, on disk]
+    files --> check[check phase<br/>when and full_cmd applied]
+    check -->|no blocking check failed| verdict[one line on stdout]
+    check -->|a blocking check failed| failures[failing tools' output<br/>on stderr, exit 1]
+```
+
+No fix phase, no `git add`, no log row. Which checks run, and with which
+command, is decided in `config.rs` before the pipeline starts
+(`Config::for_mode`), so neither `hook.rs` nor the runner has a branch on
+which run it is.
 
 The log is written before the verdict is printed, so a run is timed whether or
 not it was allowed through. A fixer that exits non-zero is not a reason to
@@ -34,7 +56,7 @@ records is how long the tool took and not how long it waited to be joined.
 ```mermaid
 flowchart LR
     main[main.rs<br/>parse, log, exit code] --> cli[cli.rs<br/>command bodies]
-    cli --> hook[hook.rs<br/>the pipeline, the verdict]
+    cli --> hook[hook.rs<br/>both pipelines, the verdict]
     cli --> stats[stats.rs<br/>percentiles, table]
     cli --> install[install.rs<br/>the pre-commit shim]
     hook --> config[config.rs<br/>what to run]

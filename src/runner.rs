@@ -91,6 +91,8 @@ pub struct StepResult {
     pub timed_out: bool,
     /// Combined stdout and stderr, already truncated to `max_output_lines`.
     pub output: String,
+    /// Whether a failure of this step fails the run — the step's `blocking`.
+    pub blocking: bool,
 }
 
 impl StepResult {
@@ -169,6 +171,7 @@ fn panicked(step: &Step, payload: &(dyn Any + Send)) -> StepResult {
         exit: EXIT_NOT_RUN,
         timed_out: false,
         output: format!("madoqua: the thread running `{}` panicked: {message}\n", step.name),
+        blocking: step.blocking,
     }
 }
 
@@ -205,6 +208,7 @@ fn run_step(
         exit,
         timed_out,
         output: truncate(&output, step.max_output_lines),
+        blocking: step.blocking,
     }
 }
 
@@ -401,6 +405,9 @@ mod tests {
             timeout: None,
             max_output_lines: None,
             on: Vec::new(),
+            when: crate::config::When::Always,
+            full_argv: None,
+            blocking: true,
         }
     }
 
@@ -460,6 +467,17 @@ mod tests {
         assert!(result.failed(), "a non-zero check blocks the commit");
         assert!(result.output.contains("out"), "stdout is captured, got: {:?}", result.output);
         assert!(result.output.contains("err"), "stderr is captured too, got: {:?}", result.output);
+    }
+
+    #[test]
+    fn a_result_says_whether_its_step_may_fail_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut advisory = step("audit", &["sh", "-c", "exit 1"]);
+        advisory.blocking = false;
+
+        let result = run_step(dir.path(), &advisory, &[], &env(), Phase::Check);
+        assert!(result.failed(), "the tool failed, and the result says so");
+        assert!(!result.blocking, "and carries the step's `blocking = false` with it");
     }
 
     #[test]

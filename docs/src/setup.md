@@ -59,6 +59,7 @@ say before making one.
 ```sh
 madoqua guide                     # what to do here, right now
 madoqua run                       # what `git commit` will do; one line if clean
+madoqua check                     # every check on the whole repo; fixes nothing
 MADOQUA_SKIP="ty check" madoqua run   # drop a check by name, this run only
 madoqua stats                     # which check is costing the most time
 ```

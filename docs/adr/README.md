@@ -18,3 +18,4 @@ has to be able to find out that it is no longer the whole story.
 | [0004](0004-the-guide-is-the-docs.md) | The guide ships the docs, and it is a seam | accepted |
 | [0005](0005-git-paths-come-from-git.md) | The paths under `.git` come from git | accepted |
 | [0006](0006-each-step-says-which-files-wake-it.md) | Each step says which staged files wake it | accepted |
+| [0007](0007-a-whole-repo-run-from-the-same-list.md) | A whole-repo run, from the same list of checks | accepted |
