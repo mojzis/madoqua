@@ -1,6 +1,6 @@
 [package]
 name = "madoqua"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2024"
 description = "A small, fast pre-commit hook runner for Python repos — silent until there's something to say"
 license = "MIT"
