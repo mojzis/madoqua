@@ -38,6 +38,48 @@ impl Phase {
     }
 }
 
+/// Which command is running: the commit hook, or the whole-repo check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// `madoqua run`: fix and check what is staged.
+    Commit,
+    /// `madoqua check`: check every file in the repository, fix nothing.
+    Full,
+}
+
+/// Which modes a check runs in, as written in its `when` key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum When {
+    /// Both the hook and the full run. The default.
+    Always,
+    /// Only the hook — a tool that works out its own diff, say.
+    Commit,
+    /// Only the full run — too slow, or too broad, for every commit.
+    Full,
+}
+
+impl When {
+    /// Parsed by hand rather than by serde: a step is an untagged enum, and
+    /// serde reports any bad field in one as "did not match any variant",
+    /// which names neither the key nor the values it would have taken.
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "always" => Ok(Self::Always),
+            "commit" => Ok(Self::Commit),
+            "full" => Ok(Self::Full),
+            other => bail!("`when = \"{other}\"` is not one of \"always\", \"commit\", \"full\""),
+        }
+    }
+
+    fn includes(self, mode: Mode) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Commit => mode == Mode::Commit,
+            Self::Full => mode == Mode::Full,
+        }
+    }
+}
+
 /// One command madoqua runs, with its argv already split.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Step {
@@ -53,6 +95,14 @@ pub struct Step {
     pub max_output_lines: Option<usize>,
     /// The staged files that wake this step. Never empty.
     pub on: Vec<Pattern>,
+    /// Which modes the step runs in. Always [`When::Always`] for a fixer.
+    pub(crate) when: When,
+    /// What the full run runs instead of `argv`, handed no file list. `None`
+    /// means `argv`, with the file list when `pass_files` says so.
+    pub(crate) full_argv: Option<Vec<String>>,
+    /// Whether a failure fails the run. `false` reports it and lets the run
+    /// pass. Always `true` for a fixer.
+    pub blocking: bool,
 }
 
 impl Step {
@@ -64,6 +114,19 @@ impl Step {
             .filter(|path| self.on.iter().any(|glob| glob.matches(path)))
             .cloned()
             .collect()
+    }
+
+    /// This step as `mode` runs it, or `None` when it does not run in `mode`.
+    fn for_mode(&self, mode: Mode) -> Option<Self> {
+        if !self.when.includes(mode) {
+            return None;
+        }
+        let mut step = self.clone();
+        if let (Mode::Full, Some(full)) = (mode, &self.full_argv) {
+            step.argv.clone_from(full);
+            step.pass_files = false;
+        }
+        Some(step)
     }
 }
 
@@ -113,6 +176,9 @@ fn builtin(table: &[(&str, &str)]) -> Vec<Step> {
             timeout: None,
             max_output_lines: None,
             on: default_on(),
+            when: When::Always,
+            full_argv: None,
+            blocking: true,
         })
         .collect()
 }
@@ -147,6 +213,22 @@ impl Config {
         Ok(config)
     }
 
+    /// The steps `mode` runs, each as that mode runs it.
+    ///
+    /// The full run fixes nothing: it answers "is the repository clean", and
+    /// rewriting files is a different question with a different command. The
+    /// rest is each check's `when` and `full_cmd`, decided here so the
+    /// pipeline and the runner never need to know there are two modes.
+    #[must_use]
+    pub fn for_mode(&self, mode: Mode) -> Self {
+        let steps = |steps: &[Step]| steps.iter().filter_map(|step| step.for_mode(mode)).collect();
+        Self {
+            fix: if mode == Mode::Full { Vec::new() } else { steps(&self.fix) },
+            check: steps(&self.check),
+            log: self.log.clone(),
+        }
+    }
+
     /// Merge one layer on top of this configuration.
     ///
     /// `fix` / `check` replace the list entirely; `extend_fix` / `extend_check`
@@ -154,16 +236,16 @@ impl Config {
     /// the replacement happens first and the extension appends to it.
     fn apply(&mut self, layer: Layer) -> Result<()> {
         if let Some(specs) = layer.fix {
-            self.fix = parse_steps(&specs)?;
+            self.fix = parse_steps(&specs, Phase::Fix)?;
         }
         if let Some(specs) = layer.check {
-            self.check = parse_steps(&specs)?;
+            self.check = parse_steps(&specs, Phase::Check)?;
         }
         if let Some(specs) = layer.extend_fix {
-            self.fix.extend(parse_steps(&specs)?);
+            self.fix.extend(parse_steps(&specs, Phase::Fix)?);
         }
         if let Some(specs) = layer.extend_check {
-            self.check.extend(parse_steps(&specs)?);
+            self.check.extend(parse_steps(&specs, Phase::Check)?);
         }
         if let Some(log) = layer.log {
             self.log = Some(log);
@@ -219,6 +301,9 @@ struct StepTable {
     timeout_s: Option<u64>,
     max_output_lines: Option<usize>,
     on: Option<Vec<String>>,
+    when: Option<String>,
+    full_cmd: Option<String>,
+    blocking: Option<bool>,
 }
 
 /// `pyproject.toml`'s nesting, so serde can reach `[tool.madoqua]`.
@@ -260,11 +345,11 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
     }
 }
 
-fn parse_steps(specs: &[StepSpec]) -> Result<Vec<Step>> {
-    specs.iter().map(parse_step).collect()
+fn parse_steps(specs: &[StepSpec], phase: Phase) -> Result<Vec<Step>> {
+    specs.iter().map(|spec| parse_step(spec, phase)).collect()
 }
 
-fn parse_step(spec: &StepSpec) -> Result<Step> {
+fn parse_step(spec: &StepSpec, phase: Phase) -> Result<Step> {
     let (cmd, table) = match spec {
         StepSpec::Cmd(cmd) => (cmd.as_str(), None),
         StepSpec::Table(table) => (table.cmd.as_str(), Some(table)),
@@ -272,6 +357,28 @@ fn parse_step(spec: &StepSpec) -> Result<Step> {
 
     let argv = split_command(cmd).with_context(|| format!("cannot use command `{cmd}`"))?;
     let name = table.and_then(|t| t.name.clone()).unwrap_or_else(|| derive_name(&argv));
+
+    if let (Phase::Fix, Some(table)) = (phase, table) {
+        refuse_check_keys(table).with_context(|| format!("cannot use fixer `{cmd}`"))?;
+    }
+    let when = match table.and_then(|t| t.when.as_deref()) {
+        None => When::Always,
+        Some(value) => When::parse(value).with_context(|| format!("cannot use `{cmd}`"))?,
+    };
+    let full_argv = match table.and_then(|t| t.full_cmd.as_deref()) {
+        None => None,
+        Some(_) if when == When::Commit => bail!(
+            "`full_cmd` on `{cmd}` would never be used: it has `when = \"commit\"`, \
+             so the full run skips it"
+        ),
+        Some(_) if when == When::Full => bail!(
+            "`full_cmd` on `{cmd}` means its `cmd` would never run: it has \
+             `when = \"full\"`, so put the command in `cmd`"
+        ),
+        Some(full) => {
+            Some(split_command(full).with_context(|| format!("cannot use full_cmd `{full}`"))?)
+        }
+    };
 
     Ok(Step {
         name,
@@ -285,7 +392,31 @@ fn parse_step(spec: &StepSpec) -> Result<Step> {
                 parse_on(globs).with_context(|| format!("cannot use `on` for `{cmd}`"))?
             }
         },
+        when,
+        full_argv,
+        blocking: table.and_then(|t| t.blocking).unwrap_or(true),
     })
+}
+
+/// Refuse the keys that only mean something for a check.
+///
+/// Fixers run only in the hook, so `when` and `full_cmd` could never take
+/// effect, and a fixer's failure already never blocks — the check after it
+/// reports what it left behind. A key that silently does nothing is a key
+/// someone will spend an afternoon on.
+fn refuse_check_keys(table: &StepTable) -> Result<()> {
+    let present = [
+        ("when", table.when.is_some()),
+        ("full_cmd", table.full_cmd.is_some()),
+        ("blocking", table.blocking.is_some()),
+    ];
+    match present.iter().find(|(_, set)| *set) {
+        Some((key, _)) => bail!(
+            "`{key}` applies to checks only: fixers run only in the commit hook, \
+             and a fixer's failure is reported by the check after it"
+        ),
+        None => Ok(()),
+    }
 }
 
 /// A step's `on` list. An empty one is refused rather than read as "never":
@@ -483,6 +614,9 @@ pub(crate) mod keys {
                 "timeout_s",
                 "max_output_lines",
                 "on",
+                "when",
+                "full_cmd",
+                "blocking",
             ] {
                 assert!(
                     keys.contains(expected),
@@ -533,7 +667,8 @@ mod tests {
 
     #[test]
     fn a_string_step_takes_files_and_derives_its_name_from_the_leading_words() {
-        let step = parse_step(&StepSpec::Cmd("ruff check --quiet".to_owned())).unwrap();
+        let step =
+            parse_step(&StepSpec::Cmd("ruff check --quiet".to_owned()), Phase::Check).unwrap();
         assert_eq!(step.name, "ruff check", "flags are not part of the name");
         assert_eq!(step.argv, ["ruff", "check", "--quiet"]);
         assert!(step.pass_files, "string form defaults to passing the file list");
@@ -542,14 +677,20 @@ mod tests {
 
     #[test]
     fn a_table_step_carries_its_own_name_and_limits() {
-        let step = parse_step(&StepSpec::Table(StepTable {
-            name: Some("ty".to_owned()),
-            cmd: "ty check".to_owned(),
-            pass_files: Some(false),
-            timeout_s: Some(120),
-            max_output_lines: Some(200),
-            on: None,
-        }))
+        let step = parse_step(
+            &StepSpec::Table(StepTable {
+                name: Some("ty".to_owned()),
+                cmd: "ty check".to_owned(),
+                pass_files: Some(false),
+                timeout_s: Some(120),
+                max_output_lines: Some(200),
+                on: None,
+                when: None,
+                full_cmd: None,
+                blocking: None,
+            }),
+            Phase::Check,
+        )
         .unwrap();
         assert_eq!(step.name, "ty", "an explicit name wins over the derived one");
         assert!(!step.pass_files, "a repo-wide tool gets no file list");
@@ -776,7 +917,7 @@ mod tests {
         let spec: StepSpec = toml::from_str::<Layer>(&format!("check = [{toml_text}]\n"))
             .map(|layer| layer.check.unwrap_or_default().into_iter().next())?
             .ok_or_else(|| anyhow!("no step in `{toml_text}`"))?;
-        parse_step(&spec)
+        parse_step(&spec, Phase::Check)
     }
 
     #[test]
@@ -832,6 +973,143 @@ mod tests {
         let err = format!("{:#}", step_from(r#"{ cmd = "lint", on = ["tests/"] }"#).unwrap_err());
         assert!(err.contains("lint"), "must name the command, got: {err}");
         assert!(err.contains("tests/"), "must name the glob, got: {err}");
+    }
+
+    fn config_from(toml_text: &str) -> Result<Config> {
+        let mut config = Config::default();
+        config.apply(toml::from_str(toml_text)?)?;
+        Ok(config)
+    }
+
+    #[test]
+    fn a_check_runs_in_both_modes_and_blocks_unless_it_says_otherwise() {
+        let step = step_from("\"bandit -q\"").unwrap();
+        assert_eq!(step.when, When::Always, "an existing config keeps running at commit time");
+        assert!(step.blocking, "and a failing check keeps blocking");
+        assert_eq!(step.full_argv, None, "and runs the same command in both modes");
+    }
+
+    #[test]
+    fn when_full_keeps_a_check_out_of_the_hook() {
+        let config = config_from(
+            r#"check = ["ruff check", { cmd = "vulture src", when = "full", pass_files = false }]"#,
+        )
+        .unwrap();
+        assert_eq!(names(&config.for_mode(Mode::Commit).check), ["ruff check"]);
+        assert_eq!(names(&config.for_mode(Mode::Full).check), ["ruff check", "vulture src"]);
+    }
+
+    #[test]
+    fn when_commit_keeps_a_check_out_of_the_full_run() {
+        let config =
+            config_from(r#"check = ["ruff check", { cmd = "gerenuk run", when = "commit" }]"#)
+                .unwrap();
+        assert_eq!(names(&config.for_mode(Mode::Commit).check), ["ruff check", "gerenuk run"]);
+        assert_eq!(names(&config.for_mode(Mode::Full).check), ["ruff check"]);
+    }
+
+    #[test]
+    fn an_unknown_when_names_the_values_it_accepts() {
+        let err =
+            format!("{:#}", config_from(r#"check = [{ cmd = "x", when = "ci" }]"#).unwrap_err());
+        for value in ["always", "commit", "full"] {
+            assert!(err.contains(value), "the error lists `{value}`, got: {err}");
+        }
+    }
+
+    #[test]
+    fn the_full_run_has_no_fixers() {
+        let full = Config::default().for_mode(Mode::Full);
+        assert_eq!(
+            names(&full.fix),
+            [] as [&str; 0],
+            "a whole-repo run reports, it never rewrites"
+        );
+        assert_eq!(names(&full.check), ["ruff check", "ty check"]);
+        assert_eq!(
+            Config::default().for_mode(Mode::Commit),
+            Config::default(),
+            "the hook is as it was"
+        );
+    }
+
+    #[test]
+    fn full_cmd_replaces_the_command_in_the_full_run_and_takes_no_files() {
+        let config = config_from(
+            r#"check = [{ name = "biston", cmd = "biston scan --focus-args", full_cmd = "biston scan ." }]"#,
+        )
+        .unwrap();
+
+        let commit = &config.for_mode(Mode::Commit).check[0];
+        assert_eq!(commit.argv, ["biston", "scan", "--focus-args"], "the hook runs `cmd`");
+        assert!(commit.pass_files, "with the staged files, as before");
+
+        let full = &config.for_mode(Mode::Full).check[0];
+        assert_eq!(full.name, "biston", "the name is the step's, whichever command runs");
+        assert_eq!(full.argv, ["biston", "scan", "."], "the full run runs `full_cmd`");
+        assert!(!full.pass_files, "a command written for the whole repo is handed no file list");
+    }
+
+    #[test]
+    fn without_full_cmd_the_full_run_keeps_the_command_and_its_file_list() {
+        let full = Config::default().for_mode(Mode::Full);
+        assert_eq!(full.check[0].argv, ["ruff", "check", "--quiet", "--"]);
+        assert!(full.check[0].pass_files, "every matching file in the repo is appended");
+    }
+
+    #[test]
+    fn a_bad_full_cmd_names_itself() {
+        let err = format!(
+            "{:#}",
+            config_from(r#"check = [{ cmd = "pytest", full_cmd = "pytest | tee" }]"#).unwrap_err()
+        );
+        assert!(err.contains("full_cmd"), "must name the key, got: {err}");
+        assert!(err.contains("pytest | tee"), "and the command, got: {err}");
+    }
+
+    #[test]
+    fn full_cmd_on_a_commit_only_step_is_refused() {
+        let err = format!(
+            "{:#}",
+            config_from(
+                r#"check = [{ cmd = "gerenuk run", when = "commit", full_cmd = "pytest" }]"#
+            )
+            .unwrap_err()
+        );
+        assert!(err.contains("full_cmd"), "a key that can never be used is a mistake, got: {err}");
+        assert!(err.contains("gerenuk run"), "and the error names the step, got: {err}");
+    }
+
+    #[test]
+    fn full_cmd_on_a_full_only_step_is_refused() {
+        let err = format!(
+            "{:#}",
+            config_from(r#"check = [{ cmd = "pytest", when = "full", full_cmd = "pytest -x" }]"#)
+                .unwrap_err()
+        );
+        assert!(err.contains("full_cmd"), "`cmd` would never run, got: {err}");
+        assert!(err.contains("`cmd`"), "so the error says where the command goes, got: {err}");
+    }
+
+    #[test]
+    fn blocking_false_is_carried_into_both_modes() {
+        let config = config_from(
+            r#"check = [{ cmd = "pysentry-rs .", pass_files = false, blocking = false }]"#,
+        )
+        .unwrap();
+        assert!(!config.for_mode(Mode::Commit).check[0].blocking);
+        assert!(!config.for_mode(Mode::Full).check[0].blocking);
+    }
+
+    #[test]
+    fn the_check_only_keys_are_refused_on_a_fixer() {
+        for key in [r#"when = "full""#, r#"full_cmd = "ruff format .""#, "blocking = false"] {
+            let text = format!(r#"extend_fix = [{{ cmd = "ruff format", {key} }}]"#);
+            let err = format!("{:#}", config_from(&text).unwrap_err());
+            let name = key.split(' ').next().unwrap_or_default();
+            assert!(err.contains(name), "`{key}` on a fixer is refused by name, got: {err}");
+            assert!(err.contains("ruff format"), "and the error names the step, got: {err}");
+        }
     }
 
     #[test]

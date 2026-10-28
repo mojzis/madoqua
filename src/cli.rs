@@ -61,6 +61,15 @@ pub enum Command {
     #[command(long_about = OVERLAY_HELP)]
     Run,
 
+    /// Check the whole repository: every check, on every file, nothing fixed
+    ///
+    /// Runs each check as if every file a commit could contain were staged —
+    /// tracked files and untracked ones git does not ignore. Nothing is fixed,
+    /// staged or logged. A check's `full_cmd` replaces its command here and is
+    /// handed no file list; `when` keeps a check to the hook or to this run;
+    /// `blocking = false` reports a failure without failing the run.
+    Check,
+
     /// Write the hooks/pre-commit shim and point git at it. Idempotent.
     Install,
 
@@ -106,6 +115,7 @@ impl Cli {
 
         match self.command.as_ref().unwrap_or(&Command::Run) {
             Command::Run => hook::run(&start, out),
+            Command::Check => hook::check(&start, out),
             Command::Install => Self::install(out, &start),
             Command::Stats { days, json, repo } => {
                 Self::stats(out, &start, *days, *json, repo.as_deref())

@@ -30,6 +30,7 @@ uv add --dev madoqua
 ```sh
 madoqua install   # write hooks/pre-commit and point git at it
 madoqua run       # what the hook does; also what a bare `madoqua` does
+madoqua check     # every check on the whole repo; fixes and stages nothing
 madoqua stats     # what the hook has been costing you
 ```
 
@@ -83,6 +84,7 @@ say before making one.
 ```sh
 madoqua guide                     # what to do here, right now
 madoqua run                       # what `git commit` will do; one line if clean
+madoqua check                     # every check on the whole repo; fixes nothing
 MADOQUA_SKIP="ty check" madoqua run   # drop a check by name, this run only
 madoqua stats                     # which check is costing the most time
 ```

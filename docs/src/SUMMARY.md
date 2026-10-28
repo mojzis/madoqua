@@ -6,6 +6,7 @@
 - [Configuration](configuration.md)
 - [Commands](commands/overview.md)
   - [run](commands/run.md)
+  - [check](commands/check.md)
   - [install](commands/install.md)
   - [stats](commands/stats.md)
   - [guide](commands/guide.md)
