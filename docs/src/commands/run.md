@@ -60,9 +60,17 @@ failed:
 src/a.py:12: error: Argument 1 has incompatible type "int"
 ```
 
-A check with `blocking = false` that fails does not block the commit. Its
+A check with `blocking = false` never blocks the commit. If it fails, its
 output goes to stderr under `== name failed (advisory) ==`, and the verdict
-ends `name failed (advisory)` instead of counting it as passed.
+ends `name failed (advisory)` instead of counting it as passed. If it passes
+but prints something — a warn-only tool such as a prose linter exits `0` by
+design — that output goes to stderr under `== name (advisory) ==`, and the
+verdict says `name passed with output (advisory)`, so a reader of stdout alone
+knows there is something to read:
+
+```
+pre-commit ok (2 files, 0.4s, slowest: ty check 0.3s): ruff check, ty check passed; prose-lint passed with output (advisory)
+```
 
 Everything informational goes to stderr, so `madoqua run` stays pipeable.
 

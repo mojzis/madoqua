@@ -113,9 +113,12 @@ invariant the code no longer upholds is a bug in one of the two.
   the step (`when`, `full_cmd`), never in a second list that would drift from
   the first. Those keys and `blocking` are check keys, and on a fixer they are
   an error rather than silently ignored.
-- **An advisory check never blocks, and never reads as passed.** A failing
+- **An advisory check never blocks, and never reads as silent.** A failing
   `blocking = false` check prints on stderr under `(advisory)` and is named as
-  `failed (advisory)` in the one-line verdict.
+  `failed (advisory)` in the one-line verdict. One that passed but printed
+  anything is shown the same way and named `passed with output (advisory)`:
+  warn-only tools exit `0` by design, and dropping their output would make
+  them pointless. A *blocking* check that passed still prints nothing.
 - **Logging is best-effort.** A failure to write the timing log warns on stderr
   and the commit proceeds. Nothing about timings may ever block a commit.
 - **A no-op run is not logged.** Runs in which no step's `on` matched a staged

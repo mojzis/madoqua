@@ -75,7 +75,9 @@ src/a.py:12: error: Argument 1 has incompatible type "int"
 CVE-2026-0001 in somelib 1.2.3
 ```
 
-A failed advisory check prints to stderr on a clean run too.
+A failed advisory check prints to stderr on a clean run too, and so does an
+advisory check that passed but printed something, under `== name (advisory) ==`
+and named in the verdict as `name passed with output (advisory)`.
 
 ## Exit codes
 

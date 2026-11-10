@@ -23,7 +23,7 @@ the clone's in a linked worktree), then `MADOQUA_SKIP`. Later layers win.
 | `max_output_lines` | none | Keep this many lines of a failure and truncate the rest. This is the knob for fitting a failure into an agent's context window. |
 | `when` | `always` | Checks only. `commit`: only in the hook; `full`: only in `madoqua check`. |
 | `full_cmd` | `cmd` | Checks only. What `madoqua check` runs instead, with no file list. |
-| `blocking` | true | Checks only. false: a failure is reported but never fails the run. |
+| `blocking` | true | Checks only. false: never fails the run; its output is shown even on a pass. |
 
 **`on` and the file list.** A step runs only if a staged file matches its
 `on`, and gets those files after its arguments: `ruff check --quiet a.py`.

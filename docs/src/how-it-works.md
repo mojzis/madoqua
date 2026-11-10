@@ -16,8 +16,9 @@ flowchart TD
     log -->|a blocking check failed| failures[failing tools' output<br/>on stderr, exit 1]
 ```
 
-A check with `blocking = false` that fails does not take the second branch:
-its output goes to stderr marked `(advisory)`, and the verdict still prints.
+A check with `blocking = false` never takes the second branch: if it fails,
+or passes but prints something, its output goes to stderr marked `(advisory)`,
+and the verdict still prints and names it.
 
 ## The whole-repo run
 

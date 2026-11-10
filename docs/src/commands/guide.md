@@ -13,7 +13,7 @@ madoqua guide tune     # the key reference
 | Topic | For |
 |---|---|
 | [`setup`](../guide/setup.md) | A repository madoqua is not wired into yet. |
-| [`triage`](../guide/triage.md) | A run that exited non-zero. |
+| [`triage`](../guide/triage.md) | A run that exited non-zero, or printed advisory output. |
 | [`tune`](../guide/tune.md) | The registry, the layers, skipping and the log. |
 
 ## Choosing a topic
