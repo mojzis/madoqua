@@ -67,7 +67,8 @@ pub enum Command {
     /// tracked files and untracked ones git does not ignore. Nothing is fixed,
     /// staged or logged. A check's `full_cmd` replaces its command here and is
     /// handed no file list; `when` keeps a check to the hook or to this run;
-    /// `blocking = false` reports a failure without failing the run.
+    /// `blocking = false` shows a failure, or a pass's output, without failing
+    /// the run.
     Check,
 
     /// Write the hooks/pre-commit shim and point git at it. Idempotent.

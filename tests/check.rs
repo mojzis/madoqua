@@ -139,6 +139,36 @@ fn an_advisory_failure_is_shown_but_does_not_fail_either_run() {
 }
 
 #[test]
+fn an_advisory_check_that_passes_with_output_shows_it_in_both_runs() {
+    let repo = wired();
+    repo.tool("prose", r#"for f in "$@"; do echo "$f:1:1 long-sentence"; done; exit 0"#);
+    repo.write(
+        "pyproject.toml",
+        "[tool.madoqua]\nfix = []\ncheck = [\"fakecheck\", \
+         { name = \"prose\", cmd = \"prose\", on = [\"*.md\"], blocking = false }]\n",
+    );
+
+    let assert = repo.madoqua().arg("check").assert().success();
+    let line = common::only_line(&assert.get_output().stdout);
+    assert!(
+        line.ends_with(": fakecheck passed; prose passed with output (advisory)"),
+        "stdout alone has to say there is something to read, got: {line}"
+    );
+    assert_eq!(
+        common::stderr(&assert),
+        "== prose (advisory) ==\nREADME.md:1:1 long-sentence\n",
+        "a warn-only tool exits 0, and its warnings are the point"
+    );
+
+    repo.stage("README.md", "hello\n");
+    let assert = repo.madoqua().arg("run").assert().success();
+    let line = common::only_line(&assert.get_output().stdout);
+    assert!(line.ends_with(": prose passed with output (advisory)"), "got: {line}");
+    assert_eq!(common::stderr(&assert), "== prose (advisory) ==\nREADME.md:1:1 long-sentence\n");
+    assert_eq!(repo.log_records()[0]["steps"][0]["exit"], 0, "and it is logged like any check");
+}
+
+#[test]
 fn an_advisory_failure_is_reported_alongside_a_blocking_one() {
     let repo = wired();
     repo.tool("audit", "echo advisory; exit 1");

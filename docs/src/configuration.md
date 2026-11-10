@@ -35,7 +35,7 @@ An entry is either a command line or a table:
 | `max_output_lines` | none | Keep this many lines of output and replace the rest with `... (N lines truncated)`. This is the knob for keeping a failure inside an agent's context window. |
 | `when` | `"always"` | Checks only. `"commit"` runs it only in the hook, `"full"` only in [`madoqua check`](commands/check.md). |
 | `full_cmd` | `cmd` | Checks only. What `madoqua check` runs instead of `cmd`, handed no file list. |
-| `blocking` | `true` | Checks only. `false` reports a failure — on stderr, and as `failed (advisory)` in the verdict — but never fails the run. |
+| `blocking` | `true` | Checks only. `false` never fails the run. A failure is reported on stderr and as `failed (advisory)` in the verdict; output from a passing run is shown on stderr too, as `passed with output (advisory)` — for warn-only tools that always exit `0`. |
 
 `when`, `full_cmd` and `blocking` on a fixer are refused with an error: fixers
 run only in the hook, and a fixer's failure never blocks anyway. So is

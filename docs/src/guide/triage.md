@@ -27,7 +27,12 @@ do; that is a configuration bug, not a finding about your code.
    message. See `madoqua guide tune`.
 
 **Around every edit.** Fix the code, stage it, and run `madoqua run` again.
-Done means one `pre-commit ok` line on stdout and nothing on stderr.
+Done means one `pre-commit ok` line on stdout and nothing on stderr but
+advisory output.
+
+**Advisory output** (`== name (advisory) ==`, or `(advisory)` in the verdict)
+never blocks. Act on it if it is about what you just wrote - it is aimed at
+you - but it is not a blocker, and the commit is not waiting on it.
 
 **Do not:**
 

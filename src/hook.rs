@@ -112,9 +112,9 @@ pub fn check(start: &Path, out: &mut impl Write) -> Result<Outcome> {
 /// Say how the run went: the one line on stdout when nothing blocks, the
 /// failing tools on stderr when something does.
 ///
-/// A failed advisory step is on stderr either way — it is information, not
-/// the verdict — and is named in the one line, so a clean run cannot read as
-/// though it passed.
+/// An advisory step is on stderr either way when it failed or printed
+/// anything — it is information, not the verdict — and is named in the one
+/// line, so a clean run cannot read as though there was nothing to see.
 fn verdict(
     out: &mut impl Write,
     mode: Mode,
@@ -124,7 +124,7 @@ fn verdict(
     venv_auto_activated: bool,
 ) -> Result<Outcome> {
     let reported: Vec<&StepResult> =
-        steps.iter().filter(|step| blocks(step) || is_advisory_failure(step)).collect();
+        steps.iter().filter(|step| blocks(step) || is_shown(step)).collect();
     eprint!("{}", failure_report(&reported));
 
     if steps.iter().any(blocks) {
@@ -175,6 +175,20 @@ fn blocks(step: &StepResult) -> bool {
 /// A check that failed but was configured not to block.
 fn is_advisory_failure(step: &StepResult) -> bool {
     step.phase == Phase::Check && !step.blocking && step.failed()
+}
+
+/// A check that does not block but printed something. A warn-only tool
+/// exits 0 by design, so going by its exit code would drop the warnings it
+/// exists to give.
+fn has_advisory_output(step: &StepResult) -> bool {
+    step.phase == Phase::Check && !step.blocking && !step.output.trim().is_empty()
+}
+
+/// Whether an advisory step goes on stderr: when it failed, or passed and had
+/// something to say. A blocking step that passed never does — the verdict is
+/// one line on success.
+fn is_shown(step: &StepResult) -> bool {
+    is_advisory_failure(step) || has_advisory_output(step)
 }
 
 /// Append the run to the timing log, and never let that stop a commit.
@@ -243,8 +257,16 @@ fn success_line(
         clauses.push(format!("{} applied & staged", applied.join(", ")));
     }
     let checks: Vec<&StepResult> = steps.iter().filter(|s| s.phase == Phase::Check).collect();
-    let passed: Vec<&str> =
-        checks.iter().filter(|s| !s.failed()).map(|s| s.name.as_str()).collect();
+    let passed: Vec<&str> = checks
+        .iter()
+        .filter(|s| !s.failed() && !has_advisory_output(s))
+        .map(|s| s.name.as_str())
+        .collect();
+    let noted: Vec<&str> = checks
+        .iter()
+        .filter(|s| !s.failed() && has_advisory_output(s))
+        .map(|s| s.name.as_str())
+        .collect();
     let advised: Vec<&str> =
         checks.iter().filter(|s| is_advisory_failure(s)).map(|s| s.name.as_str()).collect();
     if checks.is_empty() {
@@ -252,6 +274,9 @@ fn success_line(
     }
     if !passed.is_empty() {
         clauses.push(format!("{} passed", passed.join(", ")));
+    }
+    if !noted.is_empty() {
+        clauses.push(format!("{} passed with output (advisory)", noted.join(", ")));
     }
     if !advised.is_empty() {
         clauses.push(format!("{} failed (advisory)", advised.join(", ")));
@@ -264,14 +289,16 @@ fn success_line(
     format!("{label} ({head}){note}: {}", clauses.join("; "))
 }
 
-/// What a failing run prints: the failing tools, and only those. An advisory
-/// failure says so in its header, so the reader can tell it from the failure
-/// that stopped the run.
+/// What goes on stderr: the failing tools, and advisory steps with something
+/// to say. An advisory step says so in its header, so the reader can tell it
+/// from the failure that stopped the run, and one that passed is not headed
+/// as failed.
 fn failure_report(failures: &[&StepResult]) -> String {
     let mut out = String::new();
     for step in failures {
+        let failed = if step.failed() { " failed" } else { "" };
         let note = if step.blocking { "" } else { " (advisory)" };
-        let _ = writeln!(out, "== {} failed{note} ==", step.name);
+        let _ = writeln!(out, "== {}{failed}{note} ==", step.name);
         out.push_str(&step.output);
         // A tool that ends without a newline would otherwise glue its last
         // line to the next tool's header.
@@ -362,6 +389,50 @@ mod tests {
         let steps = vec![advisory("pysentry", 0, "")];
         let line = success_line(Mode::Commit, 1, Duration::from_millis(10), &steps, false);
         assert!(line.ends_with("): pysentry passed"), "got: {line}");
+    }
+
+    #[test]
+    fn a_passing_advisory_check_that_printed_is_named_as_having_output() {
+        let steps = vec![
+            step("ruff check", Phase::Check, 55, 0, ""),
+            advisory("prose-lint", 0, "a.md:1:1 x\n"),
+        ];
+        let line = success_line(Mode::Commit, 2, Duration::from_millis(60), &steps, false);
+        assert!(
+            line.ends_with("): ruff check passed; prose-lint passed with output (advisory)"),
+            "a reader of stdout alone has to know there is something on stderr, got: {line}"
+        );
+    }
+
+    #[test]
+    fn whitespace_is_not_output_worth_pointing_at() {
+        let steps = vec![advisory("prose-lint", 0, "\n  \n")];
+        let line = success_line(Mode::Commit, 1, Duration::from_millis(10), &steps, false);
+        assert!(line.ends_with("): prose-lint passed"), "got: {line}");
+        assert!(!is_shown(&steps[0]), "and nothing is printed for it");
+    }
+
+    #[test]
+    fn advisory_output_is_shown_whatever_the_exit_code_but_a_blocking_pass_stays_quiet() {
+        assert!(is_shown(&advisory("prose-lint", 0, "a.md:1:1 x\n")));
+        assert!(is_shown(&advisory("prose-lint", 1, "a.md:1:1 x\n")));
+        assert!(is_shown(&advisory("prose-lint", 1, "")), "a failure is reported even when silent");
+        assert!(!is_shown(&advisory("prose-lint", 0, "")));
+        assert!(
+            !is_shown(&step("ruff check", Phase::Check, 1, 0, "All checks passed!\n")),
+            "the verdict is one line on success: a blocking check that passed prints nothing"
+        );
+        assert!(!is_shown(&step("ruff fix", Phase::Fix, 1, 0, "Fixed 1 error\n")));
+    }
+
+    #[test]
+    fn advisory_output_from_a_passing_check_is_headed_without_failed() {
+        let advised = advisory("prose-lint", 0, "a.md:1:1 long-sentence\n");
+        assert_eq!(
+            failure_report(&[&advised]),
+            "== prose-lint (advisory) ==\na.md:1:1 long-sentence\n",
+            "a header that says failed about a check that passed would be a lie"
+        );
     }
 
     #[test]
