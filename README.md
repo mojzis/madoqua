@@ -13,7 +13,8 @@ only the tool that had one.
 
 [Documentation](https://mojzis.github.io/madoqua) ·
 [Configuration](https://mojzis.github.io/madoqua/configuration.html) ·
-[Commands](https://mojzis.github.io/madoqua/commands/overview.html)
+[Commands](https://mojzis.github.io/madoqua/commands/overview.html) ·
+part of **[aesop](https://mojzis.github.io/aesop/)**, a small menagerie of tools for agentic Python
 
 ## Install
 
