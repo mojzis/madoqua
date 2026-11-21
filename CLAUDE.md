@@ -180,3 +180,12 @@ The mdBook site under `docs/` deploys to GitHub Pages on push to `main`
   output, so `cargo test` is part of editing them (ADR 0004).
 - Adding a page means adding it to `docs/src/SUMMARY.md`; the `llms.txt`
   generator reads that file.
+
+## Release notes
+
+A change a user would notice adds one file to `release-notes/` in the same PR
+(`YYYY-MM-DD-short-slug.md`, frontmatter `kind: added|changed|fixed|removed`, one or two
+plain sentences). Run `uvx relnotes@latest guide` before writing one: it has the wording rules.
+Dependency bumps, CI, refactors and tests get no note. `uvx relnotes@latest check` validates them.
+The release workflow turns them into the GitHub release, the docs build into
+`docs/src/release-notes.md` (generated, gitignored), and the aesop site shows them.
